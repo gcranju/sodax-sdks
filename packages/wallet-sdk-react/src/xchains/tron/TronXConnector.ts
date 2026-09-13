@@ -68,16 +68,55 @@ async function discoverProviders(timeoutMs = DISCOVERY_WINDOW_MS): Promise<Tip69
   return [...found.filter(isTronLinkDetail), ...found.filter(d => !isTronLinkDetail(d))];
 }
 
-/** The provider handle available without the async discovery round-trip. */
+/** Tron's canonical account form: base58check, always `T`-prefixed. */
+const isBase58Address = (value: string): boolean => /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(value);
+
+/**
+ * Wait briefly for the wallet to publish its base58 address. `eth_requestAccounts` can resolve a
+ * tick before `tronWeb.defaultAddress` is populated, and a single read then misses it.
+ */
+async function waitForBase58(provider: TronProvider, timeoutMs = 2000): Promise<string | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const address = provider.tronWeb?.defaultAddress?.base58;
+    if (typeof address === 'string' && isBase58Address(address)) return address;
+    if (Date.now() >= deadline) return undefined;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
+/**
+ * The announced provider, cached from the last discovery run. The provider getters are sync and run
+ * after a reload without `connect()`, so without a cache they would fall back to an unconnected global.
+ */
+let announcedProvider: TronProvider | undefined;
+/** The window the cache belongs to — a different one means a different page, so start over. */
+let primedFor: unknown;
+
+/** Start discovery once per page so the announced provider is cached before it is needed. */
+function primeDiscovery(): void {
+  const w = tronWindow();
+  if (!w || primedFor === w) return;
+  primedFor = w;
+  announcedProvider = undefined;
+  void discoverProviders().then(found => {
+    announcedProvider ??= found[0]?.provider;
+  });
+}
+
+/** The provider handle available without awaiting discovery. */
 function syncProvider(): TronProvider | undefined {
   const w = tronWindow();
-  return w?.tron ?? w?.tronLink;
+  if (primedFor !== w) announcedProvider = undefined;
+  // The announced provider first: it is the connected one, and the globals may not be.
+  return announcedProvider ?? w?.tron ?? w?.tronLink;
 }
 
 /** The provider to authorize against: the TIP-6963 announcement first, then the injected globals. */
 async function resolveProvider(): Promise<TronProvider | undefined> {
   const announced = await discoverProviders();
-  return announced[0]?.provider ?? syncProvider();
+  announcedProvider = announced[0]?.provider ?? announcedProvider;
+  return announcedProvider ?? syncProvider();
 }
 
 /**
@@ -91,6 +130,8 @@ export class TronXConnector extends XConnector {
 
   constructor() {
     super('TRON', 'TronLink', 'TronLink');
+    // A reload rebuilds this connector without re-running `connect()`, so warm the cache now.
+    primeDiscovery();
   }
 
   async connect(): Promise<XAccount | undefined> {
@@ -110,10 +151,15 @@ export class TronXConnector extends XConnector {
       throw new Error(`Could not connect a Tron account${message ? `: ${message}` : ''}.`);
     }
 
-    // `accounts[0]` is the fallback because it is not guaranteed to be base58.
-    const address = provider.tronWeb?.defaultAddress?.base58 || accounts?.[0];
+    // Wait for the base58 form rather than use `accounts[0]`, which is hex.
+    const address = (await waitForBase58(provider)) ?? accounts?.[0];
     if (!address) {
       throw new Error('Tron wallet authorized but returned no account. Reload the page and retry.');
+    }
+    if (!isBase58Address(address)) {
+      throw new Error(
+        `Tron wallet returned a non-base58 account (${address}). Reload the page so the wallet can publish its T… address, then retry.`,
+      );
     }
 
     this.connected = provider;
@@ -139,9 +185,14 @@ export class TronXConnector extends XConnector {
     return TRONLINK_INSTALL_URL;
   }
 
-  /** The authorized provider's TronWeb, for the registry to build a `TronWalletProvider`. */
+  /** The authorized provider, for the registry to sign through. */
+  public getProvider(): TronProvider | undefined {
+    return this.connected ?? syncProvider();
+  }
+
+  /** The authorized provider's TronWeb. Never the global `window.tronWeb`, which cannot sign. */
   public getTronWeb(): TronWebLike | undefined {
-    return this.connected?.tronWeb ?? syncProvider()?.tronWeb ?? tronWindow()?.tronWeb;
+    return this.connected?.tronWeb ?? syncProvider()?.tronWeb;
   }
 
   /** Subscribe to wallet-side account/network changes. Returns an unsubscribe function. */
