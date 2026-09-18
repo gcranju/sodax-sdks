@@ -35,7 +35,7 @@ import {
   EvmAssetManagerService,
   EvmVaultTokenService,
   encodeContractCalls,
-  encodeAddress,
+  encodeRecipient,
   calculateFeeAmount,
   wrappedSonicAbi,
   isHubChainKeyType,
@@ -834,7 +834,7 @@ export class MoneyMarketService {
         field: 'token',
       });
 
-      const encodedDstAddress = encodeAddress(dstChainKey, dstAddress);
+      const encodedDstAddress = encodeRecipient(dstChainKey, dstAddress);
       // Only the hub wallet needs the effective (Bitcoin trading) address — that's where the
       // collateral/debt lives. srcAddress stays the personal address because `SpokeService.sendMessage`
       // resolves the effective address itself (unlike the deposit path used by supply/repay, which
@@ -1017,7 +1017,7 @@ export class MoneyMarketService {
         { ...baseCtx, field: 'token' },
       );
 
-      const encodedDstAddress = encodeAddress(dstChainKey, dstAddress);
+      const encodedDstAddress = encodeRecipient(dstChainKey, dstAddress);
       // Only the hub wallet needs the effective (Bitcoin trading) address — that's where the
       // collateral/debt lives. srcAddress stays the personal address because `SpokeService.sendMessage`
       // resolves the effective address itself (unlike the deposit path used by supply/repay, which

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TronXConnector } from './TronXConnector.js';
 
 /**
@@ -62,7 +62,27 @@ function stubWindow(
 
 const connector = () => new TronXConnector();
 
+/**
+ * Run a connect to completion on fake timers. Discovery and the base58 wait are timer-driven, and on
+ * real timers they cost seconds per test and time out on a loaded machine.
+ */
+async function settle<T>(promise: Promise<T>): Promise<T> {
+  const outcome = promise.then(
+    value => ({ ok: true as const, value }),
+    error => ({ ok: false as const, error }),
+  );
+  await vi.runAllTimersAsync();
+  const result = await outcome;
+  if (!result.ok) throw result.error;
+  return result.value;
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -100,7 +120,7 @@ describe('TronXConnector.connect — TIP-6963 discovery', () => {
     const p = provider();
     stubWindow({ announce: [{ info: { name: 'TronLink' }, provider: p }] });
 
-    await expect(connector().connect()).resolves.toEqual({ address: ADDRESS, xChainType: 'TRON' });
+    await expect(settle(connector().connect())).resolves.toEqual({ address: ADDRESS, xChainType: 'TRON' });
     expect(p.request).toHaveBeenCalledWith({ method: 'eth_requestAccounts' });
     expect(p.request).not.toHaveBeenCalledWith(expect.objectContaining({ method: 'tron_requestAccounts' }));
   });
@@ -115,7 +135,7 @@ describe('TronXConnector.connect — TIP-6963 discovery', () => {
       ],
     });
 
-    await expect(connector().connect()).resolves.toEqual({ address: ADDRESS, xChainType: 'TRON' });
+    await expect(settle(connector().connect())).resolves.toEqual({ address: ADDRESS, xChainType: 'TRON' });
     expect(tronlink.request).toHaveBeenCalled();
     expect(other.request).not.toHaveBeenCalled();
   });
@@ -129,7 +149,7 @@ describe('TronXConnector.connect — TIP-6963 discovery', () => {
       ],
     });
 
-    await connector().connect();
+    await settle(connector().connect());
 
     expect(p.request).toHaveBeenCalled();
   });
@@ -137,7 +157,7 @@ describe('TronXConnector.connect — TIP-6963 discovery', () => {
   it('stops listening for announcements once discovery is done', async () => {
     const w = stubWindow({ announce: [{ info: { name: 'TronLink' }, provider: provider() }] });
 
-    await connector().connect();
+    await settle(connector().connect());
 
     expect(w.listenerCount('TIP6963:announceProvider')).toBe(0);
   });
@@ -146,14 +166,14 @@ describe('TronXConnector.connect — TIP-6963 discovery', () => {
     const p = provider();
     stubWindow({ globals: { tron: p } });
 
-    await expect(connector().connect()).resolves.toEqual({ address: ADDRESS, xChainType: 'TRON' });
+    await expect(settle(connector().connect())).resolves.toEqual({ address: ADDRESS, xChainType: 'TRON' });
     expect(p.request).toHaveBeenCalledWith({ method: 'eth_requestAccounts' });
   });
 
   it('reports a missing wallet when nothing announces and no global exists', async () => {
     stubWindow();
 
-    await expect(connector().connect()).rejects.toThrow(/not installed/);
+    await expect(settle(connector().connect())).rejects.toThrow(/not installed/);
   });
 });
 
@@ -161,24 +181,38 @@ describe('TronXConnector.connect — address resolution', () => {
   it('prefers the base58 address from the provider tronWeb', async () => {
     stubWindow({ announce: [{ info: { name: 'TronLink' }, provider: provider() }] });
 
-    const account = await connector().connect();
+    const account = await settle(connector().connect());
 
     // `accounts[0]` is not guaranteed to be base58, so tronWeb wins when populated.
     expect(account?.address).toBe(ADDRESS);
   });
 
-  it('falls back to the returned account when tronWeb has no address yet', async () => {
+  it('waits for the base58 address when tronWeb publishes it a tick late', async () => {
     const p = provider({ tronWeb: { defaultAddress: { base58: undefined } } });
+    p.request = vi.fn().mockImplementation(async () => {
+      setTimeout(() => {
+        p.tronWeb = { defaultAddress: { base58: ADDRESS } };
+      }, 150);
+      return [HEX_ACCOUNT];
+    });
     stubWindow({ announce: [{ info: { name: 'TronLink' }, provider: p }] });
 
-    expect((await connector().connect())?.address).toBe(HEX_ACCOUNT);
+    expect((await settle(connector().connect()))?.address).toBe(ADDRESS);
+  });
+
+  it('rejects a non-base58 account rather than signing with an owner the wallet disowns', async () => {
+    // The address becomes the transaction's `owner_address`, which the wallet checks in base58.
+    const p = provider({ tronWeb: undefined });
+    stubWindow({ announce: [{ info: { name: 'TronLink' }, provider: p }] });
+
+    await expect(settle(connector().connect())).rejects.toThrow(/non-base58 account/);
   });
 
   it('rejects when authorization returns no account at all', async () => {
     const p = provider({ request: vi.fn().mockResolvedValue([]), tronWeb: undefined });
     stubWindow({ announce: [{ info: { name: 'TronLink' }, provider: p }] });
 
-    await expect(connector().connect()).rejects.toThrow(/returned no account/);
+    await expect(settle(connector().connect())).rejects.toThrow(/returned no account/);
   });
 });
 
@@ -189,14 +223,31 @@ describe('TronXConnector.connect — rejection', () => {
     });
     stubWindow({ announce: [{ info: { name: 'TronLink' }, provider: p }] });
 
-    await expect(connector().connect()).rejects.toThrow(/rejected in the wallet/);
+    await expect(settle(connector().connect())).rejects.toThrow(/rejected in the wallet/);
   });
 
   it('surfaces any other wallet error with its message', async () => {
     const p = provider({ request: vi.fn().mockRejectedValue(new Error('wallet exploded')) });
     stubWindow({ announce: [{ info: { name: 'TronLink' }, provider: p }] });
 
-    await expect(connector().connect()).rejects.toThrow(/wallet exploded/);
+    await expect(settle(connector().connect())).rejects.toThrow(/wallet exploded/);
+  });
+});
+
+describe('TronXConnector.getProvider', () => {
+  it('returns the provider that authorized, so signing does not go through the injected tronWeb', async () => {
+    // The injected `tronWeb` is an unconnected instance (`defaultPrivateKey: false`); signing
+    // through it fails with "Private key does not match address in transaction".
+    const announced = provider();
+    stubWindow({
+      announce: [{ info: { name: 'TronLink' }, provider: announced }],
+      globals: { tron: provider() },
+    });
+    const c = connector();
+
+    await settle(c.connect());
+
+    expect(c.getProvider()).toBe(announced);
   });
 });
 
@@ -210,16 +261,23 @@ describe('TronXConnector.getTronWeb', () => {
     });
     const c = connector();
 
-    await c.connect();
+    await settle(c.connect());
 
     expect(c.getTronWeb()).toBe(announced.tronWeb);
   });
 
-  it('falls back to an injected global before connecting', () => {
+  it('falls back to an injected provider global before connecting', () => {
     const p = provider();
     stubWindow({ globals: { tron: p } });
 
     expect(connector().getTronWeb()).toBe(p.tronWeb);
+  });
+
+  it('never returns the bare window.tronWeb, which is unconnected and cannot sign', () => {
+    const globalTronWeb = { defaultAddress: { base58: false as const } };
+    stubWindow({ globals: { tronWeb: globalTronWeb } });
+
+    expect(connector().getTronWeb()).toBeUndefined();
   });
 
   it('is undefined when nothing is injected, so the registry builds no provider', () => {
@@ -238,7 +296,7 @@ describe('TronXConnector.onWalletEvents', () => {
     });
     stubWindow({ announce: [{ info: { name: 'TronLink' }, provider: p }] });
     const c = connector();
-    await c.connect();
+    await settle(c.connect());
 
     const seen: [string, unknown][] = [];
     const unsubscribe = c.onWalletEvents((event, payload) => seen.push([event, payload]));
@@ -266,7 +324,7 @@ describe('TronXConnector.disconnect', () => {
     const p = provider();
     stubWindow({ announce: [{ info: { name: 'TronLink' }, provider: p }] });
     const c = connector();
-    await c.connect();
+    await settle(c.connect());
 
     await expect(c.disconnect()).resolves.toBeUndefined();
   });
