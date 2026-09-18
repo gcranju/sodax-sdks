@@ -175,11 +175,7 @@ export function isTronChainKeyType(value: SpokeChainKey): value is TronChainKey 
   return isTronChainKey(value);
 }
 
-/**
- * Settles through the MPC relay rather than the intent relay — a capability that cuts across chain
- * families (see `MpcRelayChainMap`). Prefer this over naming a chain when the question is how a
- * chain settles, so XRP and Aptos need no new branch.
- */
+/** Settles through the MPC relay rather than the intent relay. Prefer this over naming a chain. */
 export function isMpcRelayChainKeyType(value: SpokeChainKey): value is MpcRelayChainKey {
   return isMpcRelayChainKey(value);
 }

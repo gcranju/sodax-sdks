@@ -708,9 +708,8 @@ export class MoneyMarketService {
   // ==== borrow ==========================================================================
 
   /**
-   * Map a {@link SpokeService.settle} failure onto the money-market error taxonomy: a source tx that
-   * never landed is a verification failure, anything after it is a relay failure. Which settlement
-   * mechanism ran (intent relay, Bitcoin on-demand, Tron MPC relay) is not this layer's concern.
+   * Map a {@link SpokeService.settle} failure onto the money-market errors: a source tx that never
+   * landed is a verification failure, anything later a relay failure.
    */
   private mapSettlementFailure(
     failure: SettlementFailure,
