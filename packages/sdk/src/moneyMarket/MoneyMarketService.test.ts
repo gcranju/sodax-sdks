@@ -78,9 +78,8 @@ const SAMPLE_EVM_TOKEN = '0x2170Ed0880ac9A755fd29B2688956BD959F933F8' as Address
 const SAMPLE_USER_ADDRESS = '0x4444444444444444444444444444444444444444' as Address;
 const SAMPLE_DST_ADDRESS = '0x5555555555555555555555555555555555555555' as Address;
 
-// A Tron account and the two encodings it has on the hub. `encodeAddress` yields the bare 20-byte
-// identity (what derives the hub wallet); `encodeRecipient` left-pads it to a 32-byte word, which is
-// what AssetManager.transfer expects as the delivery address.
+// A Tron account: `encodeAddress` gives the 20-byte identity that derives the hub wallet,
+// `encodeRecipient` the 32-byte padded word AssetManager.transfer delivers to.
 const TRON_ADDRESS = 'TGLeueT1EauJN1AupKBPmkSE76Brm1v4ow';
 const TRON_RECIPIENT_WORD = `0x${'00'.repeat(12)}45df1d9f0d472080e5272946e4444f885473245d` as Address;
 
@@ -1540,9 +1539,7 @@ describe('MoneyMarketService.createBorrowIntent', () => {
       });
 
       expect(result.ok).toBe(true);
-      // An MPC-relay recipient reaches AssetManager.transfer as a 32-byte word (12 zero bytes then
-      // the 20-byte account), not the bare identity form used to derive the hub wallet. The bare
-      // form is still accepted on-chain, so getting this wrong delivers funds to a dead address.
+      // The bare 20-byte identity is accepted on-chain too, and would deliver to a dead address.
       expect(buildSpy.mock.calls[0]?.[1]).toBe(TRON_RECIPIENT_WORD);
     });
 
@@ -2021,9 +2018,7 @@ describe('MoneyMarketService.createWithdrawIntent', () => {
       });
 
       expect(result.ok).toBe(true);
-      // An MPC-relay recipient reaches AssetManager.transfer as a 32-byte word (12 zero bytes then
-      // the 20-byte account), not the bare identity form used to derive the hub wallet. The bare
-      // form is still accepted on-chain, so getting this wrong delivers funds to a dead address.
+      // The bare 20-byte identity is accepted on-chain too, and would deliver to a dead address.
       expect(buildSpy.mock.calls[0]?.[1]).toBe(TRON_RECIPIENT_WORD);
     });
 

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 
 import { createPublicClient, http, type Hex } from 'viem';
-import { Sodax, encodeContractCalls, tronIdentityBytes } from '@sodax/sdk';
+import { Sodax, encodeContractCalls, encodeRecipient } from '@sodax/sdk';
 import { TronWalletProvider } from '@sodax/wallet-sdk-core';
 
 /**
@@ -42,10 +42,8 @@ const TO = arg('--to'); // recipient Tron address for withdraw/borrow (defaults 
 const DATA = (arg('--data', '0x') ?? '0x') as Hex;
 const amountUnits = BigInt(Math.round(AMOUNT_TRX * 1e6)); // TRX/USDT are 6 decimals
 
-// The real raw-key provider from @sodax/wallet-sdk-core — address derivation, deposit txID
-// signing, and the scheme-1 TIP-191 withdraw-auth digest all live there. This harness deliberately
-// keeps NO signing logic of its own: an earlier inline copy drifted from the provider and signed
-// the bare message hash, which NEAR rejected with "Recovered address does not match sender".
+// All signing stays in the real provider: an inline copy here once drifted and signed the bare
+// message hash, which NEAR rejected with "Recovered address does not match sender".
 const walletProvider = new TronWalletProvider({ privateKey: PK });
 
 const sodax = new Sodax();
@@ -84,9 +82,8 @@ async function main() {
     case 'deposit':
     case 'supply':
     case 'intent': {
-      // A plain deposit still needs an ENCODED empty call array, not a literal '0x': the relay
-      // treats those non-empty bytes as the signal to deploy the user's hub wallet, so '0x' mints
-      // to a wallet that was never deployed.
+      // An encoded empty call array, not '0x': only non-empty bytes make the relay deploy the hub
+      // wallet, so '0x' mints to a wallet that was never deployed.
       const data: Hex =
         endpoint === 'supply'
           ? sodax.moneyMarket.buildSupplyData(TRON, TOKEN, amountUnits, hubWallet)
@@ -119,8 +116,8 @@ async function main() {
       const recipient = TO ?? SENDER;
       const payload: Hex =
         endpoint === 'borrow'
-          ? sodax.moneyMarket.buildBorrowData(hubWallet, tronIdentityBytes(recipient), TOKEN, amountUnits, TRON)
-          : sodax.moneyMarket.buildWithdrawData(hubWallet, tronIdentityBytes(recipient), TOKEN, amountUnits, TRON);
+          ? sodax.moneyMarket.buildBorrowData(hubWallet, encodeRecipient(TRON, recipient), TOKEN, amountUnits, TRON)
+          : sodax.moneyMarket.buildWithdrawData(hubWallet, encodeRecipient(TRON, recipient), TOKEN, amountUnits, TRON);
       log(`${endpoint} ${AMOUNT_TRX} → ${recipient}  payload=${payload.slice(0, 42)}…`);
 
       const trackingId = await tron.sendMessage({

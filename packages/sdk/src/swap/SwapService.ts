@@ -128,6 +128,7 @@ import {
   type SpokeExecActionParams,
   type SonicChainKey,
   BITCOIN_DUST_SATS,
+  isMpcRelayChainKey,
 } from '@sodax/types';
 
 export type GetIntentSubmitTxExtraDataParams = { txHash: Hash } | { intent: Intent };
@@ -715,7 +716,8 @@ export class SwapService {
           // Backend 2-step flow (default on): hand the broadcast intent tx to the swaps API, which relays +
           // post-executes server-side. On ANY non-success we fall back to the client-side relay so the
           // swap still completes — safe because re-relay / re-post are idempotent (see `submitTx`).
-          if (this.useBackendSubmitTx) {
+          // The backend only relays through the intent relay, so an MPC-relay source settles client-side.
+          if (this.useBackendSubmitTx && !isMpcRelayChainKey(srcChainKey)) {
             const submitted = await this.submitTx(_params, created, createSubmitTxAttempt(timeoutMs));
             if (submitted.ok) return submitted;
             this.config.logger.warn(

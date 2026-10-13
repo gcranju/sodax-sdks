@@ -357,10 +357,10 @@ export class SpokeService {
           plan.resetAmount === undefined
             ? undefined
             : ((await encode(plan.resetAmount)) satisfies TxReturnType<EvmChainKey, true> as TxReturnType<K, true>);
-        const approveTx = (await encode(plan.approveAmount)) satisfies TxReturnType<EvmChainKey, true> as TxReturnType<
-          K,
+        const approveTx = (await encode(plan.approveAmount)) satisfies TxReturnType<
+          EvmChainKey,
           true
-        >;
+        > as TxReturnType<K, true>;
 
         return { ok: true, value: resetTx === undefined ? { approveTx } : { resetTx, approveTx } };
       }
@@ -489,7 +489,9 @@ export class SpokeService {
     plan: Erc20ApprovalPlan,
   ): void {
     const isNoteworthy =
-      plan.resetAmount !== undefined || plan.reason === 'reset-not-viable' || plan.reason === 'allowance-read-failed';
+      plan.resetAmount !== undefined ||
+      plan.reason === 'reset-not-viable' ||
+      plan.reason === 'allowance-read-failed';
     if (!isNoteworthy) {
       return;
     }

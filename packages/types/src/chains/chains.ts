@@ -58,9 +58,7 @@ export const RelayChainIdMap = {
   [ChainKeys.STACKS_MAINNET]: 60n,
   [ChainKeys.HEDERA_MAINNET]: 18501n,
   [ChainKeys.ROBINHOOD_MAINNET]: 21071n,
-  // Tron settles through the MPC relay, not the intent relay (see MpcRelayChainMap below). This
-  // entry exists only to keep the map total (Record<ChainKey, bigint>) and mirrors Tron's native
-  // chain id; `SpokeService.settle` routes MPC chains away before an intent-relay path is reached.
+  // Tron settles via MpcRelayChainMap below; this entry keeps the map total, at Tron's native chain id.
   [ChainKeys.TRON_MAINNET]: 728126428n,
 } as const satisfies Record<ChainKey, bigint>;
 

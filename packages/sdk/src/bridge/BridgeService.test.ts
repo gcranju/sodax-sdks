@@ -942,6 +942,24 @@ describe('BridgeService.bridge — backend submit-tx (useBackendSubmitTx)', () =
     expect(submitSpy).not.toHaveBeenCalled();
   });
 
+  it('settles an MPC-relay source client-side without trying the backend, which only uses the intent relay', async () => {
+    vi.spyOn(sodaxBE.bridge, 'createBridgeIntent').mockResolvedValueOnce({
+      ok: true,
+      value: { tx: '0xspokeTx', relayData: { address: HUB_WALLET, payload: '0x' } },
+    });
+    const submitSpy = vi.spyOn(sodaxBE.api.bridge, 'submitTx');
+    const settleSpy = vi
+      .spyOn(sodaxBE.spoke, 'settle')
+      .mockResolvedValueOnce({ ok: true, value: { srcChainTxHash: '0xspokeTx', dstChainTxHash: '0xHUBMINT' } });
+
+    const result = await sodaxBE.bridge.bridge(bridgeInput(ChainKeys.TRON_MAINNET, ARBITRUM));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.dstChainTxHash).toBe('0xHUBMINT');
+    expect(submitSpy).not.toHaveBeenCalled();
+    expect(settleSpy).toHaveBeenCalledWith(expect.objectContaining({ chainKey: ChainKeys.TRON_MAINNET }));
+  });
+
   /** Backend accepts the submission but never reaches `executed`, so the attempt runs to its full budget. */
   const stubStalledBackend = () => {
     vi.spyOn(sodaxBE.api.bridge, 'submitTx').mockResolvedValueOnce({

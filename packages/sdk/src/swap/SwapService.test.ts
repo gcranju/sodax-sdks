@@ -21,6 +21,7 @@ import {
   type IEvmWalletProvider,
   type ISolanaWalletProvider,
   type IStellarWalletProvider,
+  type ITronWalletProvider,
   type IWalletProvider,
   DEFAULT_BACKEND_API_TIMEOUT,
   DEFAULT_RELAY_TX_TIMEOUT,
@@ -169,6 +170,13 @@ const mockStellarProvider = {
   getWalletAddress: vi.fn(),
   signTransaction: vi.fn(),
 } as unknown as IStellarWalletProvider;
+const mockTronProvider: ITronWalletProvider = {
+  chainType: 'TRON',
+  getWalletAddress: vi.fn(),
+  signTransaction: vi.fn(),
+  signMessage: vi.fn(),
+  waitForTransactionReceipt: vi.fn(),
+};
 
 // Base user-facing intent params parameterized by source chain. Returning a generic
 // `CreateIntentParams<K>` lets the test call sites pass a literal ChainKey and have K
@@ -3800,6 +3808,25 @@ describe('SwapService.swap — backend 2-step (useBackendSubmitTx)', () => {
 
     expect(result.ok).toBe(true);
     expect(submitSpy).not.toHaveBeenCalled();
+  });
+
+  it('settles an MPC-relay source client-side without trying the backend, which only uses the intent relay', async () => {
+    stubCreatedAndVerified(ChainKeys.TRON_MAINNET);
+    const submitSpy = vi.spyOn(sodaxBE.api.swaps, 'submitTx');
+    const settleSpy = vi
+      .spyOn(sodaxBE.spoke, 'settle')
+      .mockResolvedValueOnce({ ok: true, value: { srcChainTxHash: '0xspokeTx', dstChainTxHash: '0xHUBMINT' } });
+    mocks.solverPostExecution.mockResolvedValueOnce({ ok: true, value: { answer: 'OK' } });
+
+    const result = await sodaxBE.swaps.swap({
+      params: intentInput(ChainKeys.TRON_MAINNET),
+      raw: false,
+      walletProvider: mockTronProvider,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(submitSpy).not.toHaveBeenCalled();
+    expect(settleSpy).toHaveBeenCalledWith(expect.objectContaining({ chainKey: ChainKeys.TRON_MAINNET }));
   });
 
   /** Backend accepts the submission but never reaches `solved`, so the attempt runs to its full budget. */

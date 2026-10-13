@@ -9,8 +9,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { sha256 } from 'viem';
-import type { Hex } from '@sodax/types';
+import { getAddress, sha256 } from 'viem';
+import type { Hex, ITronWalletProvider, TronUnsignedTransaction } from '@sodax/types';
+import type { SendMessageParams } from '../../types/spoke-types.js';
 import { Sodax } from '../../entities/Sodax.js';
 import * as MpcRelayApiService from '../mpcRelay/MpcRelayApiService.js';
 import {
@@ -72,20 +73,22 @@ function stubTronGrid(overrides: Record<string, unknown> = {}) {
 
 const walletProvider = {
   chainType: 'TRON',
-  signTransaction: vi.fn(async (tx: { txID: string; raw_data_hex: string }) => ({ ...tx, signature: [SIGNATURE] })),
-  signMessage: vi.fn(async () => `0x${SIGNATURE}`),
-};
+  getWalletAddress: vi.fn(async () => SENDER),
+  signTransaction: vi.fn(async (tx: TronUnsignedTransaction) => ({ ...tx, signature: [SIGNATURE] })),
+  signMessage: vi.fn(async () => `0x${SIGNATURE}` as const),
+  waitForTransactionReceipt: vi.fn(),
+} satisfies ITronWalletProvider;
 
-const depositParams = (token: string) =>
-  ({
-    srcChainKey: TRON,
-    srcAddress: SENDER,
-    to: HUB_WALLET,
-    token,
-    amount: AMOUNT,
-    data: '0x' as Hex,
-    walletProvider,
-  }) as never;
+const unsignedDepositParams = (token: string) => ({
+  srcChainKey: TRON,
+  srcAddress: SENDER,
+  to: HUB_WALLET,
+  token,
+  amount: AMOUNT,
+  data: '0x' as Hex,
+});
+
+const depositParams = (token: string) => ({ ...unsignedDepositParams(token), walletProvider });
 
 const callTo = (path: string) => calls.find(c => c.path === path);
 
@@ -160,7 +163,7 @@ describe('TronSpokeService.deposit — TRC-20', () => {
 
     await tron.deposit(depositParams(USDT));
 
-    const signed = vi.mocked(walletProvider.signTransaction).mock.calls[0]?.[0] as Record<string, unknown>;
+    const signed = walletProvider.signTransaction.mock.calls[0]?.[0];
     expect(signed).not.toHaveProperty('raw_data');
   });
 
@@ -188,7 +191,7 @@ describe('TronSpokeService.deposit — TRC-20', () => {
   it('returns an unsigned descriptor naming the token in raw mode, touching no node', async () => {
     stubTronGrid();
 
-    const raw = await tron.deposit({ ...(depositParams(USDT) as object), raw: true } as never);
+    const raw = await tron.deposit<true>({ ...unsignedDepositParams(USDT), raw: true });
 
     expect(raw).toEqual({ from: SENDER, to: RESERVE, value: AMOUNT, data: MEMO, token: USDT });
     expect(calls).toHaveLength(0);
@@ -214,7 +217,7 @@ describe('TronSpokeService.deposit — native TRX', () => {
   it('names the native sentinel in the raw descriptor', async () => {
     stubTronGrid();
 
-    const raw = await tron.deposit({ ...(depositParams(NATIVE_TRX) as object), raw: true } as never);
+    const raw = await tron.deposit<true>({ ...unsignedDepositParams(NATIVE_TRX), raw: true });
 
     expect(raw).toMatchObject({ token: NATIVE_TRX, to: RESERVE });
   });
@@ -343,7 +346,7 @@ describe('TronSpokeService.waitForDeposit', () => {
     vi.spyOn(MpcRelayApiService, 'waitForDeposit').mockResolvedValue({
       ok: true,
       value: { depositId: 'id', status: 'minted', createdAt: 0, txs: {} },
-    } as never);
+    });
 
     await tron.waitForDeposit(TX_HASH);
     notifySpy.mockClear();
@@ -358,18 +361,47 @@ describe('TronSpokeService.estimateGas', () => {
   const rawTx = (token: string) => ({ from: SENDER, to: RESERVE, value: AMOUNT, data: MEMO, token });
 
   it('reports energy from a constant call and bandwidth from the signed transaction size', async () => {
-    stubTronGrid({ '/wallet/triggerconstantcontract': { energy_used: 31_895 } });
+    stubTronGrid({ '/wallet/triggerconstantcontract': { result: { result: true }, energy_used: 31_895 } });
 
-    const estimate = await tron.estimateGas({ chainKey: TRON, tx: rawTx(USDT) } as never);
+    const estimate = await tron.estimateGas({ chainKey: TRON, tx: rawTx(USDT) });
 
     const signed = assembleBroadcastHex(spliceMemo(TRC20_RAW, MEMO), '00'.repeat(65));
     expect(estimate).toEqual({ energy: 31_895n, bandwidth: BigInt(signed.length / 2) });
   });
 
+  it('issues the energy call and the transaction build together', async () => {
+    stubTronGrid({ '/wallet/triggerconstantcontract': { result: { result: true }, energy_used: 31_895 } });
+    const node = globalThis.fetch;
+    let inFlight = 0;
+    let peak = 0;
+    vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise(r => setTimeout(r, 0));
+      inFlight--;
+      return node(...args);
+    });
+
+    await tron.estimateGas({ chainKey: TRON, tx: rawTx(USDT) });
+
+    expect(peak).toBe(2);
+  });
+
+  // Shapes TronGrid returns for a transfer that cannot run: a missing contract, and a revert.
+  it.each([
+    [{ result: { code: 'CONTRACT_VALIDATE_ERROR', message: 'Smart contract is not exist.' } }],
+    [{ result: { result: true, message: 'REVERT opcode executed' }, energy_used: 8_624, constant_result: [''] }],
+  ])('rejects a failed transfer simulation instead of reporting its energy (%o)', async response => {
+    stubTronGrid({ '/wallet/triggerconstantcontract': response });
+
+    await expect(tron.estimateGas({ chainKey: TRON, tx: rawTx(USDT) })).rejects.toThrow(
+      /transfer simulation on .* failed/,
+    );
+  });
+
   it('reports zero energy for a native TRX transfer, which consumes none', async () => {
     stubTronGrid();
 
-    const estimate = await tron.estimateGas({ chainKey: TRON, tx: rawTx(NATIVE_TRX) } as never);
+    const estimate = await tron.estimateGas({ chainKey: TRON, tx: rawTx(NATIVE_TRX) });
 
     expect(estimate.energy).toBe(0n);
     expect(estimate.bandwidth).toBeGreaterThan(0n);
@@ -383,12 +415,41 @@ describe('TronSpokeService.sendMessage', () => {
     srcAddress: SENDER,
     dstChainKey: 'sonic',
     dstAddress: HUB_WALLET,
-    payload: '0xdeadbeef' as Hex,
+    payload: '0xdeadbeef',
     walletProvider,
-  } as never;
+  } satisfies SendMessageParams<typeof TRON, false>;
 
   const nonceOf = (call: number) =>
     BigInt(vi.mocked(MpcRelayApiService.submitWithdraw).mock.calls[call]?.[1].message.nonce ?? '0');
+
+  it.each([
+    ['too short', '0x1234'],
+    ['too long', `${HUB_WALLET}00`],
+    ['not hex', `0x${'zz'.repeat(20)}`],
+  ] as const)('refuses a hub wallet that is %s before anything is signed', async (_, dstAddress) => {
+    stubTronGrid();
+    const submit = vi.spyOn(MpcRelayApiService, 'submitWithdraw');
+
+    await expect(tron.sendMessage({ ...sendParams, dstAddress })).rejects.toThrow(
+      `invalid hub wallet address: ${dstAddress}`,
+    );
+    expect(walletProvider.signMessage).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('accepts a checksummed hub wallet, the form a contract read returns', async () => {
+    stubTronGrid();
+    const submit = vi.spyOn(MpcRelayApiService, 'submitWithdraw').mockResolvedValue({
+      ok: true,
+      value: { accepted: true, trackingId: MEMO },
+    });
+    const hubWallet = getAddress(`0x${'ab'.repeat(20)}`);
+
+    await tron.sendMessage({ ...sendParams, dstAddress: hubWallet });
+
+    expect(hubWallet).not.toBe(hubWallet.toLowerCase());
+    expect(submit.mock.calls[0]?.[1].message.to).toBe(hubWallet);
+  });
 
   it('draws a fresh random nonce per withdrawal rather than reading the clock', async () => {
     stubTronGrid();
@@ -436,9 +497,9 @@ describe('TronSpokeService — node request budget', () => {
       }),
     );
 
-    await expect(
-      tron.getDeposit({ srcChainKey: TRON, srcAddress: SENDER, token: NATIVE_TRX } as never),
-    ).rejects.toThrow(/timed out after \d+ms/);
+    await expect(tron.getDeposit({ srcChainKey: TRON, srcAddress: SENDER, token: NATIVE_TRX })).rejects.toThrow(
+      /timed out after \d+ms/,
+    );
   });
 });
 
@@ -446,7 +507,7 @@ describe('TronSpokeService.getDeposit', () => {
   it('reads balanceOf for a TRC-20', async () => {
     stubTronGrid();
 
-    const balance = await tron.getDeposit({ srcChainKey: TRON, srcAddress: SENDER, token: USDT } as never);
+    const balance = await tron.getDeposit({ srcChainKey: TRON, srcAddress: SENDER, token: USDT });
 
     expect(callTo('/wallet/triggerconstantcontract')?.body).toMatchObject({
       contract_address: USDT,
@@ -463,7 +524,7 @@ describe('TronSpokeService.getDeposit', () => {
   ])('rejects a failed TRC-20 read (%s) instead of reporting a balance', async (_label, answer) => {
     stubTronGrid({ '/wallet/triggerconstantcontract': answer });
 
-    await expect(tron.getDeposit({ srcChainKey: TRON, srcAddress: SENDER, token: USDT } as never)).rejects.toThrow(
+    await expect(tron.getDeposit({ srcChainKey: TRON, srcAddress: SENDER, token: USDT })).rejects.toThrow(
       /balanceOf on .* failed/,
     );
   });
@@ -471,7 +532,7 @@ describe('TronSpokeService.getDeposit', () => {
   it('reads the account balance for native TRX', async () => {
     stubTronGrid();
 
-    const balance = await tron.getDeposit({ srcChainKey: TRON, srcAddress: SENDER, token: NATIVE_TRX } as never);
+    const balance = await tron.getDeposit({ srcChainKey: TRON, srcAddress: SENDER, token: NATIVE_TRX });
 
     expect(callTo('/wallet/triggerconstantcontract')).toBeUndefined();
     expect(balance).toBe(42n);

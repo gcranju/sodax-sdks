@@ -59,6 +59,7 @@ import {
   type GetChainType,
   DEFAULT_RELAY_TX_TIMEOUT,
   BITCOIN_DUST_SATS,
+  isMpcRelayChainKey,
 } from '@sodax/types';
 import { encodeFunctionData } from 'viem';
 import type { ConfigService } from '../shared/config/ConfigService.js';
@@ -518,7 +519,8 @@ export class BridgeService {
           // Backend submit-tx flow (default on): hand the broadcast spoke-deposit tx to the bridge API, which
           // relays server-side. On ANY non-success we fall back to the client-side relay so the bridge
           // still completes — safe because re-relay is idempotent.
-          if (this.useBackendSubmitTx) {
+          // The backend only relays through the intent relay, so an MPC-relay source settles client-side.
+          if (this.useBackendSubmitTx && !isMpcRelayChainKey(params.srcChainKey)) {
             const submitted = await this.submitTx(_params, created.value, createSubmitTxAttempt(timeoutMs));
             if (submitted.ok) return submitted;
             this.config.logger.warn(
