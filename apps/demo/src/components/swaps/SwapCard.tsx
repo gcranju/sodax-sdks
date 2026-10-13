@@ -1,5 +1,5 @@
 import { SelectChain } from '@/components/swaps/SelectChain';
-import { SelectToken } from '@/components/swaps/SelectToken';
+import { SelectToken } from '@/components/shared/SelectToken';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -27,7 +27,7 @@ import {
   useSodaxContext,
   loadRadfiSession,
   useTradingWalletBalance,
-  useXBalances,
+  useBalances,
   useNearStorageGate,
   getSupportedSolverTokens,
   getStagingSolverTokens,
@@ -38,8 +38,6 @@ import {
   type XToken,
   type ChainType,
   ChainKeys,
-  HookKind,
-  isHookSupportedToken,
 } from '@sodax/dapp-kit';
 import {
   getXChainType,
@@ -47,7 +45,6 @@ import {
   useXAccount,
   useXDisconnect,
   useWalletProvider,
-  useXService,
 } from '@sodax/wallet-sdk-react';
 import type { Order } from '@/components/swaps/OrderStatus';
 import { DEFAULT_SELECTED_CHAIN, SolverEnv, useAppStore } from '@/zustand/useAppStore';
@@ -55,7 +52,7 @@ import { BitcoinSetupPanel } from '@/components/bitcoin/BitcoinSetupPanel';
 import { loadLastSelection, saveLastSelection } from '@/lib/lastSelection';
 import { appendOrder } from '@/lib/orderHistory';
 import { buildOrderSummary } from '@/components/swaps/OrderStatus';
-import { solverApiEndpointForEnv } from '@/constants';
+import { HOOK_LABELS, resolveAvailableHookKind, toHookRequest } from '@/lib/deliveryHooks';
 
 export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAction<Order[]>) => void }) {
   const { sodax } = useSodaxContext();
@@ -76,8 +73,12 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
   );
 
   // Persist the latest chain/token picks (symbol only) so they restore on reload.
+  // Skip while a chain has no solver-supported token yet (e.g. Hedera in production/dev) —
+  // src.token/dst.token is undefined right after such a chain switch.
   useEffect(() => {
-    if (src.token && dst.token) saveLastSelection(src, dst);
+    if (src.token && dst.token) {
+      saveLastSelection(src, dst);
+    }
   }, [src, dst]);
   const sourceAccount = useXAccount({ xChainId: src.chain });
   const sourceWalletProvider = useWalletProvider({ xChainId: src.chain });
@@ -147,14 +148,26 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
   const [nearStorageError, setNearStorageError] = useState<string | null>(null);
   const [stellarError, setStellarError] = useState<string | null>(null);
   const [slippage, setSlippage] = useState<string>('0.5');
-  const [hyperCoreDeposit, setHyperCoreDeposit] = useState(false);
+  const [deliveryHookEnabled, setDeliveryHookEnabled] = useState(false);
   const [isBitcoinReady, setIsBitcoinReady] = useState(false);
   const [isDestBitcoinReady, setIsDestBitcoinReady] = useState(false);
 
-  // HyperCore deposit is available only when the destination chain/token is accepted by the registered
-  // hook (HyperEVM + USDC today). The registry — not this component — owns those constraints.
-  const canHyperCoreDeposit =
-    !!dst.token && isHookSupportedToken(dst.chain, HookKind.HYPERCORE_DEPOSIT, dst.token.address);
+  // The delivery hook — if any — that the registry accepts for this destination chain + output token
+  // (HyperCore on HyperEVM+USDC, Flint on Ethereum+USDC today). Resolved from the registry rather than
+  // pinned to one kind, so a newly registered hook surfaces here without touching this component.
+  const availableHookKind = useMemo(
+    () => resolveAvailableHookKind(dst.chain, dst.token?.address),
+    [dst.chain, dst.token],
+  );
+
+  // Reset the toggle whenever the resolved hook kind changes (including to/from `undefined`) — the
+  // checkbox must never carry an opt-in for a hook the user didn't see. Without this, checking the box
+  // for one destination and then switching to a different destination that resolves a different hook
+  // kind would silently submit that other hook instead.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: availableHookKind is the intentional reset trigger, not a value read in the effect
+  useEffect(() => {
+    setDeliveryHookEnabled(false);
+  }, [availableHookKind]);
 
   const onChangeDirection = () => {
     setSrc(dst);
@@ -172,24 +185,20 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
   };
 
   // Balance fetching- Fetch source token balance for the connected wallet
-  const sourceXService = useXService({ xChainType: getXChainType(src.chain) });
-  const { data: sourceBalances } = useXBalances({
+  const { data: sourceBalances } = useBalances({
     params: {
-      xService: sourceXService,
-      xChainId: src.chain,
-      xTokens: src.token ? [src.token] : [],
+      chainKey: src.chain,
+      tokens: src.token ? [src.token] : [],
       address: sourceAccount.address,
     },
   });
   const sourceTokenBalance = sourceBalances?.[src.token?.address ?? ''] ?? 0n;
 
   // Fetch destination token balance for the connected wallet
-  const destXService = useXService({ xChainType: getXChainType(dst.chain) });
-  const { data: destBalances } = useXBalances({
+  const { data: destBalances } = useBalances({
     params: {
-      xService: destXService,
-      xChainId: dst.chain,
-      xTokens: dst.token ? [dst.token] : [],
+      chainKey: dst.chain,
+      tokens: dst.token ? [dst.token] : [],
       address: destAccount.address,
     },
   });
@@ -261,6 +270,12 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
       : undefined;
   }, [quote, slippage]);
 
+  const speedTier = useMemo(
+    () =>
+      src.token && dst.token ? sodax.swaps.getSwapSpeedTier({ srcToken: src.token, dstToken: dst.token }) : undefined,
+    [sodax, src.token, dst.token],
+  );
+
   const onSourceAmountChange = (value: string) => {
     setSourceAmount(value);
   };
@@ -308,9 +323,9 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
       dstAddress = tradingAddress;
     }
 
-    // HyperCore deposit: select the hook by kind and keep dstAddress as the recipient (the user's own
-    // HyperEVM address). The SDK resolves the hook's deployed address and encodes the payload.
-    const useHyperCoreDeposit = hyperCoreDeposit && canHyperCoreDeposit;
+    // Delivery hook: select it by kind and keep dstAddress as the recipient (the user's own address on
+    // the destination chain). The SDK resolves the hook's deployed address and encodes the payload.
+    const hookRequest = deliveryHookEnabled && availableHookKind ? toHookRequest(availableHookKind) : undefined;
 
     const createIntentParams = {
       inputToken: src.token.address, // The address of the input token on hub chain
@@ -326,7 +341,7 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
       solver: '0x0000000000000000000000000000000000000000', // Optional specific solver address (address(0) = any solver)
       data: '0x', // Additional arbitrary data
       // When set, the SDK routes the output through this hook (overrides dstAddress, encodes deliveryData).
-      hook: useHyperCoreDeposit ? { kind: HookKind.HYPERCORE_DEPOSIT } : undefined,
+      hook: hookRequest,
     } satisfies CreateIntentParams;
 
     setIntentOrderPayload(createIntentParams);
@@ -351,7 +366,7 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
           dstTxHash: intentDeliveryInfo.dstTxHash as string,
           srcTxHash: intentDeliveryInfo.srcTxHash,
           srcChainKey: intentDeliveryInfo.srcChainKey,
-          statusEndpoint: solverApiEndpointForEnv(solverEnvironment),
+          statusEndpoint: sodax.config.solver.solverApiEndpoint,
           createdAt: Date.now(),
           summary: buildOrderSummary(src, dst, sourceAmount, quote?.quoted_amount),
         }),
@@ -415,7 +430,7 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
   return (
     <Card className="w-full max-w-lg mx-auto">
       <CardHeader>
-        <CardTitle className="text-2xl font-bold text-center">Cross-Chain Swap</CardTitle>
+        <CardTitle className="text-xl sm:text-2xl font-bold text-center">Cross-Chain Swap (SDK)</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
@@ -444,8 +459,8 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
             className="w-[110px]"
           />
         </div>
-        <div className="mix-blend-multiply text-black text-(length:--body-comfortable) font-medium font-['InterRegular'] flex gap-1">
-          <span className="hidden sm:inline">Balance:</span>
+        <div className="mix-blend-multiply text-black text-(length:--body-comfortable) font-medium flex gap-1">
+          <span>Balance:</span>
           <span className="inline">
             {formatTokenAmount(
               src.chain === ChainKeys.BITCOIN_MAINNET && srcTradingBal ? srcTradingBal.btcSatoshi : sourceTokenBalance,
@@ -505,8 +520,8 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
             className="w-[110px]"
           />
         </div>
-        <div className="mix-blend-multiply text-black text-(length:--body-comfortable) font-medium font-['InterRegular'] flex gap-1">
-          <span className="hidden sm:inline">Balance:</span>
+        <div className="mix-blend-multiply text-black text-(length:--body-comfortable) font-medium flex gap-1">
+          <span>Balance:</span>
           <span className="inline">
             {formatTokenAmount(
               dst.chain === ChainKeys.BITCOIN_MAINNET && destTradingBal ? destTradingBal.btcSatoshi : destTokenBalance,
@@ -548,13 +563,13 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
       </CardContent>
       <CardFooter className="flex flex-col space-y-4">
         <div className="w-full text-sm text-muted-foreground">
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center gap-2">
             <span>Exchange Rate</span>
-            <span>
+            <span className="text-right">
               1 {src.token?.symbol} ≈ {exchangeRate.toString()} {dst.token?.symbol}
             </span>
           </div>
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center gap-2">
             <span>Slippage:</span>
             <div className="flex items-center gap-2">
               <Input type="number" value={slippage} onChange={e => setSlippage(e.target.value)} />
@@ -562,29 +577,36 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
             </div>
           </div>
 
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center gap-2">
             <span>Minimum Output Amount</span>
-            <span>
+            <span className="text-right">
               {minOutputAmount ? formatUnits(BigInt(minOutputAmount.toFixed(0)), dst.token?.decimals ?? 0) : '0'}{' '}
               {dst.token?.symbol}
             </span>
           </div>
+
+          <div className="flex justify-between items-center gap-2">
+            <span>Estimated Settlement</span>
+            <span className="text-right">
+              {speedTier ? `~${speedTier.estimatedSeconds}s (${speedTier.tier})` : '—'}
+            </span>
+          </div>
         </div>
 
-        <div className="">
+        <div className="wrap-anywhere">
           {quoteQuery.data?.ok === false && <div className="text-red-500">{quoteQuery.data.error.detail.message}</div>}
         </div>
 
-        {canHyperCoreDeposit && (
+        {availableHookKind && (
           <div className="flex items-center gap-2 w-full">
-            <label htmlFor="hypercore-deposit-toggle" className="text-sm font-medium cursor-pointer">
-              Deposit to HyperCore (perps)
+            <label htmlFor="delivery-hook-toggle" className="text-sm font-medium cursor-pointer">
+              {HOOK_LABELS[availableHookKind]}
             </label>
             <input
-              id="hypercore-deposit-toggle"
+              id="delivery-hook-toggle"
               type="checkbox"
-              checked={hyperCoreDeposit}
-              onChange={e => setHyperCoreDeposit(e.target.checked)}
+              checked={deliveryHookEnabled}
+              onChange={e => setDeliveryHookEnabled(e.target.checked)}
               className="h-4 w-4 cursor-pointer"
             />
           </div>
@@ -611,7 +633,7 @@ export default function SwapCard({ setOrders }: { setOrders: (value: SetStateAct
               <DialogDescription>See details of intent order.</DialogDescription>
             </DialogHeader>
             <div className="">
-              <div className="flex flex-col">
+              <div className="flex flex-col wrap-anywhere">
                 <div>
                   inputToken: {intentOrderPayload?.inputToken} on {intentOrderPayload?.srcChainKey}
                 </div>

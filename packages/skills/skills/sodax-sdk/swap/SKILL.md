@@ -23,6 +23,7 @@ Swap has materially different code paths depending on the answers. Don't skip:
    - Unsigned → `raw: true`, you handle relay yourself.
 3. **One-shot `swap()` or step-by-step (`createIntent` → backend submit → `postExecution`)?**
    - One-shot is the default for frontends. Step-by-step is for backends that already have a relay/orchestration layer.
+   - Step-by-step code must reproduce BOTH paths `swap()` runs internally — the backend submit-tx attempt *and* the client-side relay fallback on any non-success. The helpers behind `swap()` are package-internal, so the loop is hand-written: [`../integration/knowledge/recipes/manual-submit-tx-with-fallback.md`](../integration/knowledge/recipes/manual-submit-tx-with-fallback.md).
 4. **Market order or limit order?** Limit orders use a different params shape — `deadline` becomes optional (forced to `0n` internally), not required.
 
 ## Integration workflow (writing new v2 swap code)
@@ -63,7 +64,7 @@ Read in order. Skipping `ai-rules.md` is the most common cause of agents reverti
 - [`../partner/SKILL.md`](../partner/SKILL.md) — partner fees on swap.
 - [`../recovery/SKILL.md`](../recovery/SKILL.md) — stuck-asset recovery for failed swaps.
 - [`../backend-api/SKILL.md`](../backend-api/SKILL.md) — `sodax.api.swaps.submitTx` and intent / orderbook lookups (step-by-step swap flow + diagnostics).
-- [`../swaps-api/SKILL.md`](../swaps-api/SKILL.md) — the typed Swaps API v2 backend client (`sodax.api.swaps`: quote, create-intent, submit-tx, fees) the swap flow calls under the hood.
+- [`../swaps-api/SKILL.md`](../swaps-api/SKILL.md) — the typed Swaps API backend client (`sodax.api.swaps`: quote, create-intent, submit-tx, fees) the swap flow calls under the hood.
 
 For tasks spanning multiple features, load the broad [`sodax-sdk` skill](../SKILL.md) instead.
 

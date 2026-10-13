@@ -56,6 +56,7 @@ function stubTronGrid(overrides: Record<string, unknown> = {}) {
         ...overrides,
       };
 
+      // `rpc` reads only `ok` and `json()`, so a partial Response stands in for the real one.
       return { ok: true, json: async () => responses[path] ?? {} } as unknown as Response;
     }),
   );
@@ -65,7 +66,7 @@ const walletProvider = {
   chainType: 'TRON',
   signTransaction: vi.fn(async (tx: { txID: string; raw_data_hex: string }) => ({ ...tx, signature: [SIGNATURE] })),
   signMessage: vi.fn(async () => `0x${SIGNATURE}`),
-} as never;
+};
 
 const depositParams = (token: string) =>
   ({
@@ -82,6 +83,8 @@ const callTo = (path: string) => calls.find(c => c.path === path);
 
 beforeEach(() => {
   calls = [];
+  // vitest 4's restoreAllMocks no longer clears `vi.fn` call history, and the wallet mock is shared.
+  vi.clearAllMocks();
   vi.spyOn(MpcRelayApiService, 'getDepositAddress').mockResolvedValue({
     ok: true,
     value: {

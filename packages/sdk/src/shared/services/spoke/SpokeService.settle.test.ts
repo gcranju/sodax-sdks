@@ -158,11 +158,13 @@ describe('SpokeService.settle — Tron MPC relay', () => {
   const TRACKING_ID = '0xeeee000000000000000000000000000000000000000000000000000000000005' as Hex;
 
   const depositRecord = (txs: Record<string, { chain: string; hash: string; ts: number }>) =>
+    // Only the fields `settle` reads; the full relay record carries more.
     ({ ok: true as const, value: { depositId: 'id', status: 'minted', createdAt: 0, txs } }) as unknown as Awaited<
       ReturnType<typeof spoke.tron.waitForDeposit>
     >;
 
   const withdrawalRecord = (txs: Record<string, { chain: string; hash: string; ts: number }>) =>
+    // Only the fields `settle` reads; the full relay record carries more.
     ({ ok: true as const, value: { trackingId: TRACKING_ID, status: 'released', txs } }) as unknown as Awaited<
       ReturnType<typeof spoke.tron.waitForWithdrawal>
     >;

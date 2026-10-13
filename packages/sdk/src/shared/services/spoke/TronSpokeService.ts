@@ -17,11 +17,14 @@ import { retry } from '../../utils/shared-utils.js';
 import type {
   DepositParams,
   EstimateGasParams,
+  GetBalanceParams,
+  GetBalancesParams,
   GetDepositParams,
   SendMessageParams,
   WaitForTxReceiptParams,
   WaitForTxReceiptReturnType,
 } from '../../types/spoke-types.js';
+import { createBalanceCollector, settleWalletBalances, type WalletBalanceMap } from './balance-utils.js';
 import {
   getDepositAddress,
   notify,
@@ -335,6 +338,20 @@ export class TronSpokeService {
       visible: false,
     });
     return BigInt(acct.balance ?? 0);
+  }
+
+  /** The user's own wallet balance of a token — the same read as {@link getDeposit}, since Tron holds no deposit. */
+  public async getWalletBalance(params: GetBalanceParams<TronChainKey>): Promise<bigint> {
+    const { srcChainKey, srcAddress, token } = params;
+    return this.getDeposit({ srcChainKey, srcAddress, token: token.address });
+  }
+
+  /** The user's own wallet balances of several tokens, keyed by `token.address`. */
+  public async getWalletBalances(params: GetBalancesParams<TronChainKey>): Promise<WalletBalanceMap> {
+    const { srcChainKey, srcAddress, tokens } = params;
+    const collector = createBalanceCollector({ logger: this.config.logger, chainKey: srcChainKey });
+    await settleWalletBalances(collector, tokens, token => this.getWalletBalance({ srcChainKey, srcAddress, token }));
+    return collector.finish();
   }
 
   /**
