@@ -917,6 +917,25 @@ describe('SonicSpokeService.createSwapIntent (static)', () => {
       expect(intent.outputToken).toBe(hubAsset);
     });
 
+    it('Sonic→Tron: writes the dstAddress as the 32-byte word AssetManager.transfer delivers to', async () => {
+      const params = baseCreateIntentParams(SONIC, {
+        dstChainKey: ChainKeys.TRON_MAINNET,
+        outputToken: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+        dstAddress: 'TGLeueT1EauJN1AupKBPmkSE76Brm1v4ow',
+      });
+
+      const [, intent] = await SonicSpokeService.createSwapIntent({
+        createIntentParams: params,
+        creatorHubWalletAddress: HUB_WALLET,
+        solverConfig,
+        fee: undefined,
+        hubProvider: baseHubProvider,
+        raw: true,
+      });
+
+      expect(intent.dstAddress).toBe(`0x${'00'.repeat(12)}45df1d9f0d472080e5272946e4444f885473245d`);
+    });
+
     it('returns `inputAmount - feeAmount` as the intent inputAmount when a partner fee is configured', async () => {
       mocks.createIntentFeeData.mockReturnValueOnce(['0xfeeenvelope' as Hex, 12_345n]);
       mocks.composeIntentData.mockReturnValueOnce('0xpartnerfee' as Hex);

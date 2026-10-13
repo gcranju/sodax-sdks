@@ -3,7 +3,7 @@ import type { Address, Hex } from 'viem';
 import {
   EvmAssetManagerService,
   type SpokeService,
-  encodeAddress,
+  encodeRecipient,
   Erc20Service,
   Erc4626Service,
   EvmVaultTokenService,
@@ -402,7 +402,7 @@ export class AssetService {
         params.asset,
         params.amount,
         fromHubWallet,
-        encodeAddress(dstChainKey, recipient),
+        encodeRecipient(dstChainKey, recipient),
       );
 
       const data = encodeContractCalls(calls);

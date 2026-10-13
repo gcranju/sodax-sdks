@@ -250,7 +250,11 @@ To size a full exit, read the share balance with `getShareBalanceForUser(vault, 
   fallback the backend path takes on any non-success.
 
 This is the leverage-yield counterpart of `swaps.useBackendSubmitTx`, and it defaults on the same way.
-Read the effective value on `sodax.config.leverageYieldUseBackendSubmitTx`.
+Read the effective value on `sodax.config.leverageYieldUseBackendSubmitTx`. A source chain that settles
+through the MPC relay (Tron) always takes the client-side path, since the backend relays through the
+intent relay only. A vault withdraw (`hubWalletSwap`) from such a chain is refused before signing with
+`VALIDATION_FAILED` (`field: 'srcChainKey'`): the SDK can confirm a message from it only once the relay
+releases funds to that chain, and a withdraw's `createIntent` releases nothing.
 
 `POST /leverage-yield/submit-tx` declares an API-key scope (`swaps:write`) where the status read declares
 none, and key enforcement is a per-deployment setting. Where it is enforced, a keyless caller spends one
@@ -748,6 +752,10 @@ Four things worth knowing about what comes back:
 > wallet, so the hub wallet has to be derived from that address rather than the personal one — which
 > these paths do not do. `openPosition`, `openPositionFromDebtToken` and `operatePosition` return
 > `VALIDATION_FAILED` (`field: 'srcChainKey'`) for a Bitcoin source rather than funding the wrong wallet.
+>
+> **`operatePosition` from an MPC-relay chain (Tron) is refused too**, with the same error and before
+> signing: the SDK can confirm a message from it only once the relay releases funds to that chain, which
+> position calls do not do. Opening from Tron is a deposit and settles through the relay.
 
 
 Positions live on the hub, but nothing requires the user to. These carry the work there. They post the

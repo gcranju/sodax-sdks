@@ -51,4 +51,26 @@ describe('AssetService.executeWithdraw', () => {
     const sendArg = (sodax.spoke.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
     expect(sendArg.dstAddress).toBe(HUB_WALLET);
   });
+
+  it('hands a Tron recipient to the AssetManager transfer as the 32-byte word the release reads', async () => {
+    const result = await asset.executeWithdraw({
+      params: {
+        srcChainKey: ChainKeys.TRON_MAINNET,
+        srcAddress: 'TGLeueT1EauJN1AupKBPmkSE76Brm1v4ow',
+        asset: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+        poolToken: POOL_TOKEN,
+        amount: 1000n,
+      },
+      raw: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(asset.getTokenUnwrapAction).toHaveBeenCalledWith(
+      ChainKeys.TRON_MAINNET,
+      'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+      1000n,
+      HUB_WALLET,
+      `0x${'00'.repeat(12)}45df1d9f0d472080e5272946e4444f885473245d`,
+    );
+  });
 });

@@ -19,7 +19,6 @@ import {
   isPartnerFeeAmount,
   isPartnerFeePercentage,
   isUndefinedOrValidWalletProviderForChainKey,
-  relayTxAndWaitPacket,
   RELAY_FALLBACK_FLOOR_MS,
   retry,
   type RelayExtraData,
@@ -32,6 +31,7 @@ import {
   getIntentRelayChainId,
   HUB_CHAIN_KEY,
   isBitcoinChainKey,
+  isMpcRelayChainKey,
   SolverIntentErrorCode,
   SolverIntentStatusCode,
 } from '@sodax/types';
@@ -309,6 +309,15 @@ export type PositionOperationParams<K extends SpokeChainKey, C extends EvmRawTra
  */
 const BITCOIN_UNSUPPORTED_MESSAGE =
   'Bitcoin is not a supported source chain for leverage positions; use a supported spoke or the hub';
+
+/**
+ * An MPC-relay source (Tron) sends a hub-wallet message as a withdrawal, which settles only once funds are
+ * released to the spoke, and then reports that release, not the hub tx. Calls that release nothing (a
+ * vault withdraw's createIntent, a position operation) can never settle that way, so they are refused
+ * before signing: the relay runs the calls once it accepts the signed message.
+ */
+const MPC_RELAY_MESSAGE_UNSUPPORTED_MESSAGE =
+  'Hub-wallet messages from an MPC-relay source chain are not supported; use a supported spoke or the hub';
 
 /** Sentinel `solver` address meaning "any solver may fill this intent". */
 const ANY_SOLVER_ADDRESS: Address = '0x0000000000000000000000000000000000000000';
@@ -1006,6 +1015,11 @@ export class LeverageYieldService {
         `Invalid wallet provider for chain key: ${params.srcChainKey}`,
         baseCtx,
       );
+      leverageYieldInvariant(
+        !(hubWalletSwap && isMpcRelayChainKey(params.srcChainKey)),
+        MPC_RELAY_MESSAGE_UNSUPPORTED_MESSAGE,
+        { ...baseCtx, field: 'srcChainKey' },
+      );
       // Hub-wallet swap (withdraw): `inputToken` lives on the hub, not on `srcChainKey`
       // (which is the chain the user signs on). Validate it against the hub chain instead.
       const hubChainKey = this.hubProvider.chainConfig.chain.key;
@@ -1262,7 +1276,8 @@ export class LeverageYieldService {
           // enforces keys every vault swap spends one rejected attempt here before completing
           // client-side. Set `leverageYield.useBackendSubmitTx: false` to skip it. Swap's submit-tx
           // declares the same scope and has defaulted on since it shipped.
-          if (this.useBackendSubmitTx) {
+          // The backend only relays through the intent relay, so an MPC-relay source settles client-side.
+          if (this.useBackendSubmitTx && !isMpcRelayChainKey(srcChainKey)) {
             const submitted = await this.submitTx(_params, created, createSubmitTxAttempt(timeoutMs));
             if (submitted.ok) return submitted;
             this.config.logger.warn(
@@ -1320,33 +1335,36 @@ export class LeverageYieldService {
     const baseCtx = { srcChainKey, dstChainKey: params.dstChainKey, action: 'vaultSwap' satisfies LeverageYieldAction };
     const { tx: spokeTxHash, intent, relayData } = created;
 
-    const verifyTxHashResult = await this.spoke.verifyTxHash({
-      txHash: spokeTxHash,
-      chainKey: srcChainKey,
-    });
-    if (!verifyTxHashResult.ok) {
-      return { ok: false, error: verifyFailed('leverageYield', verifyTxHashResult.error, baseCtx) };
-    }
-
     let dstIntentTxHash: string;
     if (isHubChainKeyType(srcChainKey)) {
+      const verifyTxHashResult = await this.spoke.verifyTxHash({ txHash: spokeTxHash, chainKey: srcChainKey });
+      if (!verifyTxHashResult.ok) {
+        return { ok: false, error: verifyFailed('leverageYield', verifyTxHashResult.error, baseCtx) };
+      }
       dstIntentTxHash = spokeTxHash;
     } else {
-      const packet = await relayTxAndWaitPacket({
-        srcTxHash: spokeTxHash,
-        data: relayData,
+      const settled = await this.spoke.settle({
         chainKey: srcChainKey,
-        relayerApiEndpoint: this.config.relay.relayerApiEndpoint,
+        tx: spokeTxHash,
+        // A hub-wallet swap relays under its spoke tx like a deposit (Bitcoin included); MPC-relay ones are refused.
+        direction: 'inbound',
+        relayData,
         // The caller's full `timeout`, starting HERE — whether this runs as the only path or as the
         // backend's fallback, so a stalled backend attempt cannot shorten the relay wait. The floor
-        // covers a sub-floor caller `timeout`: `relayTxAndWaitPacket` SUBMITS before `timeout` bounds
-        // anything, so a zero budget would strand an already-landed tx unrelayed.
+        // covers a sub-floor caller `timeout`: settlement SUBMITS before `timeout` bounds anything,
+        // so a zero budget would strand an already-landed tx unrelayed.
         timeout: Math.max(timeoutMs, RELAY_FALLBACK_FLOOR_MS),
       });
-      if (!packet.ok) {
-        return { ok: false, error: mapRelayFailure(packet.error, { feature: 'leverageYield', ...baseCtx }) };
+      if (!settled.ok) {
+        return {
+          ok: false,
+          error:
+            settled.error.phase === 'verification'
+              ? verifyFailed('leverageYield', settled.error.cause, baseCtx)
+              : mapRelayFailure(settled.error.cause, { feature: 'leverageYield', ...baseCtx }),
+        };
       }
-      dstIntentTxHash = packet.value.dst_tx_hash;
+      dstIntentTxHash = settled.value.dstChainTxHash;
     }
 
     const postExecResult = await this.notifySolver({
@@ -3572,6 +3590,10 @@ export class LeverageYieldService {
         ...baseCtx,
         field: 'srcChainKey',
       });
+      leverageYieldInvariant(!isMpcRelayChainKey(params.srcChainKey), MPC_RELAY_MESSAGE_UNSUPPORTED_MESSAGE, {
+        ...baseCtx,
+        field: 'srcChainKey',
+      });
       leverageYieldInvariant(params.calls.length > 0, 'at least one call is required', {
         ...baseCtx,
         field: 'calls',
@@ -3620,10 +3642,10 @@ export class LeverageYieldService {
     baseCtx: { srcChainKey: K; action: LeverageYieldAction },
     opts: { timeout: number },
   ): Promise<Result<TxHashPair, LeverageYieldSwapError>> {
-    const verify = await this.spoke.verifyTxHash({ txHash: srcTxHash, chainKey: baseCtx.srcChainKey });
-    if (!verify.ok) return { ok: false, error: verifyFailed('leverageYield', verify.error, baseCtx) };
-
     if (isHubChainKeyType(baseCtx.srcChainKey)) {
+      const verify = await this.spoke.verifyTxHash({ txHash: srcTxHash, chainKey: baseCtx.srcChainKey });
+      if (!verify.ok) return { ok: false, error: verifyFailed('leverageYield', verify.error, baseCtx) };
+
       /**
        * WAIT FOR IT, and check it succeeded. `verifyTxHash` above does not: on an EVM chain it
        * returns `{ ok: true }` without waiting, so returning here on its word reported a merely
@@ -3648,24 +3670,28 @@ export class LeverageYieldService {
       return { ok: true, value: { srcChainTxHash: srcTxHash as Hex, dstChainTxHash: srcTxHash as Hex } };
     }
 
-    const packet = await relayTxAndWaitPacket({
-      srcTxHash,
-      data: relayData,
+    const settled = await this.spoke.settle({
       chainKey: baseCtx.srcChainKey,
-      relayerApiEndpoint: this.config.relay.relayerApiEndpoint,
+      tx: srcTxHash,
+      // Only the open path reaches an MPC relay here, as a deposit; operations from one are refused.
+      direction: 'inbound',
+      relayData,
       timeout: opts.timeout,
     });
-    if (!packet.ok) {
+    if (!settled.ok) {
       return {
         ok: false,
-        error: mapRelayFailure(packet.error, {
-          feature: 'leverageYield',
-          action: baseCtx.action,
-          srcChainKey: baseCtx.srcChainKey,
-        }),
+        error:
+          settled.error.phase === 'verification'
+            ? verifyFailed('leverageYield', settled.error.cause, baseCtx)
+            : mapRelayFailure(settled.error.cause, {
+                feature: 'leverageYield',
+                action: baseCtx.action,
+                srcChainKey: baseCtx.srcChainKey,
+              }),
       };
     }
 
-    return { ok: true, value: { srcChainTxHash: srcTxHash as Hex, dstChainTxHash: packet.value.dst_tx_hash } };
+    return settled;
   }
 }

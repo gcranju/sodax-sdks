@@ -215,6 +215,22 @@ describe('EvmSolverService.constructCreateIntentData', () => {
     expect(intent.dstAddress).toBe(DST_USER);
   });
 
+  it('writes a Tron (MPC-relay) dstAddress as the 32-byte word AssetManager.transfer delivers to', () => {
+    vi.mocked(mockConfig.getSpokeTokenFromOriginalAssetAddress)
+      .mockReturnValueOnce(hubInputXToken)
+      .mockReturnValueOnce(hubOutputXToken);
+
+    const [, intent] = EvmSolverService.constructCreateIntentData(
+      { ...baseParams(), dstChainKey: ChainKeys.TRON_MAINNET, dstAddress: 'TGLeueT1EauJN1AupKBPmkSE76Brm1v4ow' },
+      HUB_WALLET,
+      mockConfig,
+      undefined,
+    );
+
+    // The Intents contract passes intent.dstAddress to AssetManager.transfer unchanged.
+    expect(intent.dstAddress).toBe(`0x${'00'.repeat(12)}45df1d9f0d472080e5272946e4444f885473245d`);
+  });
+
   it('treats the input token as already-on-hub when srcChainKey is the hub chain (skips lookup)', () => {
     // Only the *output* lookup runs; the input is the hub asset directly.
     vi.mocked(mockConfig.getSpokeTokenFromOriginalAssetAddress).mockReturnValueOnce(hubOutputXToken);
