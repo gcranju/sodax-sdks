@@ -682,9 +682,9 @@ export type NearSpokeChainConfig = BaseSpokeChainConfig<'NEAR'> & {
  * of the intent relay: deposits are paid to a shared reserve and tracked over the relay's REST API,
  * rather than submitted as a packet.
  *
- * The presence of `mpcRelayApiEndpoint` IS the marker the SDK routes on (see `isMpcRelayChainConfig`)
- * — there is no hardcoded list of MPC chains. Tron is the only one today; XRP and Aptos are the same
- * shape, so adding them is a config change plus a spoke service, not a new branch in feature code.
+ * Routing does not read this config: the SDK routes on membership in {@link MpcRelayChainMap}
+ * (`isMpcRelayChainKey`). Tron is the only member today; XRP and Aptos have the same shape, so adding
+ * them is a map entry, this config and a spoke service, not a new branch in feature code.
  */
 export type MpcRelayChainConfig = {
   /** MPC relay REST endpoint (notify + deposit-address), distinct from the intent relay. */

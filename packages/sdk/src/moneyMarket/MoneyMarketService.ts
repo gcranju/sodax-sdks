@@ -547,10 +547,7 @@ export class MoneyMarketService {
 
           // Settlement is skipped only when the source chain is the hub.
           if (isHubChainKeyType(srcChainKey)) {
-            return {
-              ok: true,
-              value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: txResult.value.tx },
-            };
+            return this.verifyHubAction(txResult.value.tx, srcChainKey, baseCtx);
           }
 
           const settled = await this.spoke.settle({
@@ -721,6 +718,20 @@ export class MoneyMarketService {
   }
 
   /**
+   * The no-settlement path: the action ran on the hub itself, so verify that tx as
+   * {@link SpokeService.settle} does before an intent relay, and report it as both hashes.
+   */
+  private async verifyHubAction(
+    tx: string,
+    srcChainKey: SpokeChainKey,
+    ctx: { action: string; srcChainKey: SpokeChainKey; dstChainKey?: SpokeChainKey },
+  ): Promise<Result<TxHashPair, MoneyMarketOrchestrationError>> {
+    const verify = await this.spoke.verifyTxHash({ txHash: tx, chainKey: srcChainKey });
+    if (!verify.ok) return { ok: false, error: verifyFailed('moneyMarket', verify.error, ctx) };
+    return { ok: true, value: { srcChainTxHash: tx, dstChainTxHash: tx } };
+  }
+
+  /**
    * Borrow tokens from the money market lending pool and wait for the cross-chain relay to
    * deliver the funds to the destination address.
    *
@@ -756,10 +767,7 @@ export class MoneyMarketService {
             (params.dstChainKey != null && params.dstAddress != null && params.dstChainKey !== hubChainId);
 
           if (!needsSettlement) {
-            return {
-              ok: true,
-              value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: txResult.value.tx },
-            };
+            return this.verifyHubAction(txResult.value.tx, srcChainKey, baseCtx);
           }
 
           const settled = await this.spoke.settle({
@@ -939,10 +947,7 @@ export class MoneyMarketService {
               params.dstAddress !== walletRouter);
 
           if (!needsSettlement) {
-            return {
-              ok: true,
-              value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: txResult.value.tx },
-            };
+            return this.verifyHubAction(txResult.value.tx, srcChainKey, baseCtx);
           }
 
           const settled = await this.spoke.settle({
@@ -1111,10 +1116,7 @@ export class MoneyMarketService {
 
           // Settlement is skipped only when the source chain is the hub.
           if (isHubChainKeyType(srcChainKey)) {
-            return {
-              ok: true,
-              value: { srcChainTxHash: txResult.value.tx, dstChainTxHash: txResult.value.tx },
-            };
+            return this.verifyHubAction(txResult.value.tx, srcChainKey, baseCtx);
           }
 
           const settled = await this.spoke.settle({

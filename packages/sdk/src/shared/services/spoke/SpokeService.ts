@@ -1313,13 +1313,6 @@ export class SpokeService {
     }
   }
 
-  /**
-   * Wait for a spoke action to settle and return both hashes — the single settlement seam for feature
-   * services, keeping the per-chain-family mechanics here. Whether settlement is needed stays with the
-   * caller.
-   *
-   * @returns both tx hashes, or a {@link SettlementFailure} naming the phase that failed.
-   */
   /** The MPC-relay settlement service for a chain, or `undefined` when it rides the intent relay. */
   private getMpcRelayService(chainKey: SpokeChainKey): MpcRelaySettlement | undefined {
     if (!isMpcRelayChainKeyType(chainKey)) return undefined;
@@ -1333,6 +1326,13 @@ export class SpokeService {
     }
   }
 
+  /**
+   * Wait for a spoke action to settle and return both hashes — the single settlement seam for feature
+   * services, keeping the per-chain-family mechanics here. Whether settlement is needed stays with the
+   * caller.
+   *
+   * @returns both tx hashes, or a {@link SettlementFailure} naming the phase that failed.
+   */
   public async settle(params: SettleParams): Promise<Result<TxHashPair, SettlementFailure>> {
     const { chainKey, tx, direction, relayData, timeout } = params;
 

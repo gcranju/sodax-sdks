@@ -6,20 +6,37 @@
 import { concat, keccak256, numberToHex, sha256, type Hex } from 'viem';
 
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const TRON_ADDRESS_HEX = /^41[0-9a-fA-F]{40}$/;
 
-/** base58check Tron address → 41-prefixed hex (drops the 4-byte checksum). Accepts hex/0x pass-through. */
-export function tronBase58ToHex(addr: string): string {
-  if (addr.startsWith('0x')) return addr.slice(2);
-  if (/^41[0-9a-fA-F]{40}$/.test(addr)) return addr;
+function base58Decode(addr: string): Uint8Array {
   let n = 0n;
   for (const c of addr) {
     const i = B58.indexOf(c);
     if (i < 0) throw new Error(`invalid base58 char in Tron address: ${addr}`);
     n = n * 58n + BigInt(i);
   }
-  let h = n.toString(16);
-  if (h.length % 2) h = `0${h}`;
-  return h.slice(0, -8); // strip checksum
+  const body = n === 0n ? '' : n.toString(16);
+  const leadingZeros = addr.length - addr.replace(/^1+/, '').length;
+  return Uint8Array.from(Buffer.from(`${'00'.repeat(leadingZeros)}${body.length % 2 ? '0' : ''}${body}`, 'hex'));
+}
+
+/**
+ * Tron address → 41-prefixed hex (21 bytes). A base58 address must be valid base58check: 25 bytes,
+ * `0x41` version byte, matching double-SHA256 checksum. Hex input (with or without `0x`) must be the
+ * same 21-byte `41…` form. Anything else throws — a mistyped recipient must never decode to a
+ * different identity.
+ */
+export function tronBase58ToHex(addr: string): string {
+  const hex = addr.startsWith('0x') ? addr.slice(2) : addr;
+  if (TRON_ADDRESS_HEX.test(hex)) return hex;
+  if (addr.startsWith('0x')) throw new Error(`invalid Tron address hex: ${addr}`);
+
+  const bytes = base58Decode(addr);
+  if (bytes.length !== 25 || bytes[0] !== 0x41) throw new Error(`invalid Tron address: ${addr}`);
+  const payload = bytes.subarray(0, 21);
+  const checksum = sha256(sha256(payload, 'bytes'), 'bytes').subarray(0, 4);
+  if (!checksum.every((b, i) => b === bytes[21 + i])) throw new Error(`invalid Tron address checksum: ${addr}`);
+  return Buffer.from(payload).toString('hex');
 }
 
 /**

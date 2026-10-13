@@ -149,6 +149,21 @@ describe('encodeAddress destination validation (BRIDGE-M-2)', () => {
   ])('rejects a malformed Injective recipient (%s)', (_label, address) => {
     expect(() => encodeAddress(ChainKeys.INJECTIVE_MAINNET, address)).toThrow(/Invalid Injective address/);
   });
+
+  it('encodes a Tron recipient as its 20-byte address hash', () => {
+    expect(encodeAddress(ChainKeys.TRON_MAINNET, 'TYQvjFWzc2Cnt91LXnk7UJVii3JVfSm69d')).toBe(
+      '0xf62fffa4d92bcdfc310dccbe943747fe8302e871',
+    );
+  });
+
+  it.each([
+    ['in-charset single-char typo (checksum)', 'TYQvjFWzc2Cnt91LXnk7UJVii3JVfSm69e'],
+    ['truncated', 'TYQvjFWzc2Cnt91LXnk7UJVii3JVfSm69'],
+    ['bare 20-byte hex', '0xf62fffa4d92bcdfc310dccbe943747fe8302e871'],
+    ['empty string', ''],
+  ])('rejects a malformed Tron recipient (%s)', (_label, address) => {
+    expect(() => encodeAddress(ChainKeys.TRON_MAINNET, address)).toThrow(/invalid Tron address/);
+  });
 });
 
 /**

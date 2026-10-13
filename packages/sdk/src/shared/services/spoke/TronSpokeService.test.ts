@@ -9,10 +9,17 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { sha256 } from 'viem';
 import type { Hex } from '@sodax/types';
 import { Sodax } from '../../entities/Sodax.js';
 import * as MpcRelayApiService from '../mpcRelay/MpcRelayApiService.js';
-import { assembleBroadcastHex, encodeTrc20TransferParams, spliceMemo, tronBase58ToHex } from './tron-utils.js';
+import {
+  assembleBroadcastHex,
+  encodeTrc20TransferParams,
+  spliceMemo,
+  tronBase58ToHex,
+  tronHashToBase58,
+} from './tron-utils.js';
 
 const sodax = new Sodax();
 const tron = sodax.spoke.tron;
@@ -51,6 +58,7 @@ function stubTronGrid(overrides: Record<string, unknown> = {}) {
         '/wallet/broadcasthex': { result: true },
         '/wallet/getaccount': { balance: 42 },
         '/wallet/triggerconstantcontract': {
+          result: { result: true },
           constant_result: ['0000000000000000000000000000000000000000000000000000000000000539'],
         },
         ...overrides,
@@ -216,7 +224,7 @@ describe('TronSpokeService.deposit — rotated reserve', () => {
   // The relay's client contract: `reserveAddress` is not a constant, and a client must pay the
   // address from the CURRENT response. Refusing a rotation would strand deposits, so this warns.
   it('pays the reserve the relay returned even when the chain config names another, and warns', async () => {
-    const rotated = 'TW7ArGnLzGFvXeYbFmjzGVQwFwCJBiLLLL';
+    const rotated = tronHashToBase58('22'.repeat(20));
     stubTronGrid();
     vi.mocked(MpcRelayApiService.getDepositAddress).mockResolvedValue({
       ok: true,
@@ -271,6 +279,39 @@ describe('TronSpokeService.deposit — notify failure', () => {
     expect(callTo('/wallet/broadcasthex')).toBeDefined();
     // Notifying twice is harmless, so the transient failure is retried before giving up.
     expect(vi.mocked(MpcRelayApiService.notify).mock.calls.length).toBeGreaterThan(1);
+  });
+});
+
+describe('TronSpokeService.deposit — broadcast failure', () => {
+  // The txID is the hash of the signed raw, known before broadcast; it is the only handle on a
+  // transfer that may have landed despite the failure.
+  const txID = sha256(`0x${spliceMemo(NATIVE_RAW, MEMO)}`).slice(2);
+
+  it('keeps the tx id when the node rejects the broadcast', async () => {
+    stubTronGrid({ '/wallet/broadcasthex': { result: false, message: 'SIGERROR' } });
+
+    await expect(tron.deposit(depositParams(NATIVE_TRX))).rejects.toThrow(`broadcast of ${txID} failed: SIGERROR`);
+    expect(MpcRelayApiService.notify).not.toHaveBeenCalled();
+  });
+
+  it('keeps the tx id and the cause when the broadcast does not complete', async () => {
+    stubTronGrid();
+    const answer = globalThis.fetch;
+    const transportError = new TypeError('fetch failed');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: { body: string }) => {
+        if (new URL(url).pathname === '/wallet/broadcasthex') throw transportError;
+        return answer(url, init);
+      }),
+    );
+
+    const failure = await tron.deposit(depositParams(NATIVE_TRX)).catch((error: Error) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(`broadcast of ${txID} did not complete`);
+    expect((failure as Error).cause).toBe(transportError);
+    expect(MpcRelayApiService.notify).not.toHaveBeenCalled();
   });
 });
 
@@ -412,6 +453,19 @@ describe('TronSpokeService.getDeposit', () => {
       function_selector: 'balanceOf(address)',
     });
     expect(balance).toBe(0x539n);
+  });
+
+  // Response shapes captured from TronGrid. The old read turned these into 0n or a garbage balance.
+  it.each([
+    ['not a contract', { result: { code: 'CONTRACT_VALIDATE_ERROR', message: 'Smart contract is not exist.' } }],
+    ['reverted', { result: { result: true, message: 'REVERT opcode executed' }, constant_result: [''] }],
+    ['reverted with a reason', { result: { result: true }, constant_result: [`08c379a0${'00'.repeat(96)}`] }],
+  ])('rejects a failed TRC-20 read (%s) instead of reporting a balance', async (_label, answer) => {
+    stubTronGrid({ '/wallet/triggerconstantcontract': answer });
+
+    await expect(tron.getDeposit({ srcChainKey: TRON, srcAddress: SENDER, token: USDT } as never)).rejects.toThrow(
+      /balanceOf on .* failed/,
+    );
   });
 
   it('reads the account balance for native TRX', async () => {

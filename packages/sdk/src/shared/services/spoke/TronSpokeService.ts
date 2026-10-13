@@ -237,10 +237,19 @@ export class TronSpokeService {
     const signature = signed.signature[0];
     if (!signature) throw new Error('[TronSpokeService.deposit] wallet returned no signature');
 
-    const broadcast = await this.rpc<{ result?: boolean; message?: string }>('/wallet/broadcasthex', {
-      transaction: assembleBroadcastHex(rawWithMemo, signature),
-    });
-    if (!broadcast.result) throw new Error(`[TronSpokeService.deposit] broadcast failed: ${broadcast.message ?? ''}`);
+    // The txID is fixed before broadcast, so every failure carries it: an ambiguous one may still land.
+    let broadcast: { result?: boolean; message?: string };
+    try {
+      broadcast = await this.rpc('/wallet/broadcasthex', { transaction: assembleBroadcastHex(rawWithMemo, signature) });
+    } catch (error) {
+      throw new Error(
+        `[TronSpokeService.deposit] broadcast of ${txID} did not complete — it may still land; look it up before retrying`,
+        { cause: error },
+      );
+    }
+    if (!broadcast.result) {
+      throw new Error(`[TronSpokeService.deposit] broadcast of ${txID} failed: ${broadcast.message ?? ''}`);
+    }
     return txID;
   }
 
@@ -322,15 +331,24 @@ export class TronSpokeService {
   /** On-chain balance of `token` for the owner — memo mode has no asset manager to read instead. */
   public async getDeposit(params: GetDepositParams<TronChainKey>): Promise<bigint> {
     if (params.token !== this.chainConfig.nativeToken) {
-      const res = await this.rpc<{ constant_result?: string[] }>('/wallet/triggerconstantcontract', {
-        owner_address: params.srcAddress,
-        contract_address: params.token,
-        function_selector: 'balanceOf(address)',
-        parameter: tronAddressToWord(params.srcAddress),
-        visible: true,
-      });
+      const res = await this.rpc<{ result?: { result?: boolean; message?: string }; constant_result?: string[] }>(
+        '/wallet/triggerconstantcontract',
+        {
+          owner_address: params.srcAddress,
+          contract_address: params.token,
+          function_selector: 'balanceOf(address)',
+          parameter: tronAddressToWord(params.srcAddress),
+          visible: true,
+        },
+      );
+      // A failed read still answers 200: an error `result`, or a revert with an empty or longer word.
       const word = res.constant_result?.[0];
-      return word ? BigInt(`0x${word}`) : 0n;
+      if (res.result?.result !== true || !word || !/^[0-9a-fA-F]{64}$/.test(word)) {
+        throw new Error(
+          `[TronSpokeService.getDeposit] balanceOf on ${params.token} failed: ${res.result?.message ?? 'no result'}`,
+        );
+      }
+      return BigInt(`0x${word}`);
     }
 
     const acct = await this.rpc<{ balance?: number }>('/wallet/getaccount', {

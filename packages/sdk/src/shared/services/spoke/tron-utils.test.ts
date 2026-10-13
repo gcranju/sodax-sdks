@@ -30,6 +30,27 @@ describe('tronBase58ToHex', () => {
   it('rejects invalid base58', () => {
     expect(() => tronBase58ToHex('0OIl-not-base58')).toThrow(/invalid base58/);
   });
+
+  it('rejects a same-length typo through the checksum instead of decoding another identity', () => {
+    expect(() => tronBase58ToHex('TKEsLgfqRdC9PX88hvW1WWnMhH53qCMe93')).toThrow(/checksum/);
+    expect(() => tronBase58ToHex('TKEsLgfqRdC9PX88gvW1WWnMhH53qCMe92')).toThrow(/checksum/);
+  });
+
+  it('rejects a base58 address of the wrong length', () => {
+    expect(() => tronBase58ToHex(RESERVE.slice(0, -1))).toThrow(/invalid Tron address/);
+    expect(() => tronBase58ToHex(`${RESERVE}2`)).toThrow(/invalid Tron address/);
+  });
+
+  it('rejects a valid base58check address with a non-Tron version byte', () => {
+    expect(() => tronBase58ToHex('1BoatSLRHtKNngkdXEeobR76b53LETtpyT')).toThrow(/invalid Tron address/);
+  });
+
+  it('rejects hex that is not the 21-byte 41-prefixed form', () => {
+    expect(() => tronBase58ToHex(`0x${RESERVE_HEX.slice(2)}`)).toThrow(/invalid Tron address hex/);
+    expect(() => tronBase58ToHex(`0x${RESERVE_HEX.slice(0, -2)}`)).toThrow(/invalid Tron address hex/);
+    expect(() => tronBase58ToHex(`0x${RESERVE_HEX}00`)).toThrow(/invalid Tron address hex/);
+    expect(() => tronBase58ToHex(RESERVE_HEX.slice(2))).toThrow();
+  });
 });
 
 describe('tronAddressToWord', () => {
@@ -89,6 +110,10 @@ describe('encodeTrc20TransferParams', () => {
 describe('tronIdentityBytes', () => {
   it('returns the 20-byte address hash (0x41 version byte dropped)', () => {
     expect(tronIdentityBytes('TYQvjFWzc2Cnt91LXnk7UJVii3JVfSm69d')).toBe('0xf62fffa4d92bcdfc310dccbe943747fe8302e871');
+  });
+
+  it('rejects a bare 20-byte hex rather than truncating it to 19 bytes', () => {
+    expect(() => tronIdentityBytes('0xf62fffa4d92bcdfc310dccbe943747fe8302e871')).toThrow(/invalid Tron address hex/);
   });
 });
 

@@ -1273,7 +1273,7 @@ describe('MoneyMarketService.supply', () => {
           relayData: { address: HUB_WALLET, payload: '0x' },
         },
       });
-      vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: true, value: true });
+      const verifySpy = vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: true, value: true });
 
       const result = await sodax.moneyMarket.supply({
         raw: false,
@@ -1283,6 +1283,7 @@ describe('MoneyMarketService.supply', () => {
 
       expect(result).toEqual({ ok: true, value: { srcChainTxHash: '0xhub-tx', dstChainTxHash: '0xhub-tx' } });
       expect(mocks.relayTxAndWaitPacket).not.toHaveBeenCalled();
+      expect(verifySpy).toHaveBeenCalledWith({ txHash: '0xhub-tx', chainKey: ChainKeys.SONIC_MAINNET });
     });
 
     it('on EVM spoke: relays the packet and returns { srcChainTxHash, dstChainTxHash }', async () => {
@@ -1389,6 +1390,31 @@ describe('MoneyMarketService.supply', () => {
       expect(result.error.cause).toBe(verifyError);
       expect(result.error.context?.phase).toBe('verify');
       expect(result.error.context?.action).toBe('supply');
+    });
+
+    it('wraps a hub-sourced verifyTxHash failure the same way (action="supply")', async () => {
+      vi.spyOn(sodax.moneyMarket, 'createSupplyIntent').mockResolvedValueOnce({
+        ok: true,
+        value: {
+          tx: '0xhub-tx',
+          relayData: { address: HUB_WALLET, payload: '0x' },
+        },
+      });
+      const verifyError = new Error('VERIFY_FAILED');
+      vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: false, error: verifyError });
+
+      const result = await sodax.moneyMarket.supply({
+        raw: false,
+        params: supplyParams(ChainKeys.SONIC_MAINNET),
+        walletProvider: mockEvmProvider,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe('TX_VERIFICATION_FAILED');
+      expect(result.error.cause).toBe(verifyError);
+      expect(result.error.context?.action).toBe('supply');
+      expect(mocks.relayTxAndWaitPacket).not.toHaveBeenCalled();
     });
 
     it('wraps a RELAY_TIMEOUT relay failure as MM_RELAY_TIMEOUT with relayCode + action context', async () => {
@@ -1754,7 +1780,7 @@ describe('MoneyMarketService.borrow', () => {
           relayData: { address: HUB_WALLET, payload: '0x' },
         },
       });
-      vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: true, value: true });
+      const verifySpy = vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: true, value: true });
 
       const result = await sodax.moneyMarket.borrow({
         raw: false,
@@ -1764,6 +1790,7 @@ describe('MoneyMarketService.borrow', () => {
 
       expect(result).toEqual({ ok: true, value: { srcChainTxHash: '0xhub-tx', dstChainTxHash: '0xhub-tx' } });
       expect(mocks.relayTxAndWaitPacket).not.toHaveBeenCalled();
+      expect(verifySpy).toHaveBeenCalledWith({ txHash: '0xhub-tx', chainKey: ChainKeys.SONIC_MAINNET });
     });
 
     it('on hub with non-hub target: relays the packet (cross-chain delivery)', async () => {
@@ -1862,6 +1889,31 @@ describe('MoneyMarketService.borrow', () => {
       expect(result.error.code).toBe('TX_VERIFICATION_FAILED');
       expect(result.error.cause).toBe(verifyError);
       expect(result.error.context?.action).toBe('borrow');
+    });
+
+    it('wraps a hub-sourced verifyTxHash failure the same way (action="borrow")', async () => {
+      vi.spyOn(sodax.moneyMarket, 'createBorrowIntent').mockResolvedValueOnce({
+        ok: true,
+        value: {
+          tx: '0xhub-tx',
+          relayData: { address: HUB_WALLET, payload: '0x' },
+        },
+      });
+      const verifyError = new Error('VERIFY_FAILED');
+      vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: false, error: verifyError });
+
+      const result = await sodax.moneyMarket.borrow({
+        raw: false,
+        params: borrowParams(ChainKeys.SONIC_MAINNET),
+        walletProvider: mockEvmProvider,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe('TX_VERIFICATION_FAILED');
+      expect(result.error.cause).toBe(verifyError);
+      expect(result.error.context?.action).toBe('borrow');
+      expect(mocks.relayTxAndWaitPacket).not.toHaveBeenCalled();
     });
 
     it('wraps RELAY_TIMEOUT as MM_RELAY_TIMEOUT with action="borrow"', async () => {
@@ -2168,7 +2220,7 @@ describe('MoneyMarketService.withdraw', () => {
           relayData: { address: HUB_WALLET, payload: '0x' },
         },
       });
-      vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: true, value: true });
+      const verifySpy = vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: true, value: true });
 
       const result = await sodax.moneyMarket.withdraw({
         raw: false,
@@ -2178,6 +2230,7 @@ describe('MoneyMarketService.withdraw', () => {
 
       expect(result).toEqual({ ok: true, value: { srcChainTxHash: '0xhub-tx', dstChainTxHash: '0xhub-tx' } });
       expect(mocks.relayTxAndWaitPacket).not.toHaveBeenCalled();
+      expect(verifySpy).toHaveBeenCalledWith({ txHash: '0xhub-tx', chainKey: ChainKeys.SONIC_MAINNET });
     });
 
     it('on hub with non-hub target: relays', async () => {
@@ -2242,7 +2295,7 @@ describe('MoneyMarketService.withdraw', () => {
           relayData: { address: HUB_WALLET, payload: '0x' },
         },
       });
-      vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: true, value: true });
+      const verifySpy = vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: true, value: true });
 
       const result = await sodax.moneyMarket.withdraw({
         raw: false,
@@ -2256,6 +2309,7 @@ describe('MoneyMarketService.withdraw', () => {
 
       expect(result).toEqual({ ok: true, value: { srcChainTxHash: '0xhub-tx', dstChainTxHash: '0xhub-tx' } });
       expect(mocks.relayTxAndWaitPacket).not.toHaveBeenCalled();
+      expect(verifySpy).toHaveBeenCalledWith({ txHash: '0xhub-tx', chainKey: ChainKeys.SONIC_MAINNET });
     });
   });
 
@@ -2300,6 +2354,31 @@ describe('MoneyMarketService.withdraw', () => {
       expect(result.error.code).toBe('TX_VERIFICATION_FAILED');
       expect(result.error.cause).toBe(verifyError);
       expect(result.error.context?.action).toBe('withdraw');
+    });
+
+    it('wraps a hub-sourced verifyTxHash failure the same way (action="withdraw")', async () => {
+      vi.spyOn(sodax.moneyMarket, 'createWithdrawIntent').mockResolvedValueOnce({
+        ok: true,
+        value: {
+          tx: '0xhub-tx',
+          relayData: { address: HUB_WALLET, payload: '0x' },
+        },
+      });
+      const verifyError = new Error('VERIFY_FAILED');
+      vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: false, error: verifyError });
+
+      const result = await sodax.moneyMarket.withdraw({
+        raw: false,
+        params: withdrawParams(ChainKeys.SONIC_MAINNET),
+        walletProvider: mockEvmProvider,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe('TX_VERIFICATION_FAILED');
+      expect(result.error.cause).toBe(verifyError);
+      expect(result.error.context?.action).toBe('withdraw');
+      expect(mocks.relayTxAndWaitPacket).not.toHaveBeenCalled();
     });
 
     it('wraps RELAY_TIMEOUT as MM_RELAY_TIMEOUT with action="withdraw"', async () => {
@@ -2610,7 +2689,7 @@ describe('MoneyMarketService.repay', () => {
           relayData: { address: HUB_WALLET, payload: '0x' },
         },
       });
-      vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: true, value: true });
+      const verifySpy = vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: true, value: true });
 
       const result = await sodax.moneyMarket.repay({
         raw: false,
@@ -2620,6 +2699,7 @@ describe('MoneyMarketService.repay', () => {
 
       expect(result).toEqual({ ok: true, value: { srcChainTxHash: '0xhub-tx', dstChainTxHash: '0xhub-tx' } });
       expect(mocks.relayTxAndWaitPacket).not.toHaveBeenCalled();
+      expect(verifySpy).toHaveBeenCalledWith({ txHash: '0xhub-tx', chainKey: ChainKeys.SONIC_MAINNET });
     });
 
     it('on EVM spoke: relays the packet', async () => {
@@ -2714,6 +2794,31 @@ describe('MoneyMarketService.repay', () => {
       expect(result.error.code).toBe('TX_VERIFICATION_FAILED');
       expect(result.error.cause).toBe(verifyError);
       expect(result.error.context?.action).toBe('repay');
+    });
+
+    it('wraps a hub-sourced verifyTxHash failure the same way (action="repay")', async () => {
+      vi.spyOn(sodax.moneyMarket, 'createRepayIntent').mockResolvedValueOnce({
+        ok: true,
+        value: {
+          tx: '0xhub-tx',
+          relayData: { address: HUB_WALLET, payload: '0x' },
+        },
+      });
+      const verifyError = new Error('VERIFY_FAILED');
+      vi.spyOn(sodax.spoke, 'verifyTxHash').mockResolvedValueOnce({ ok: false, error: verifyError });
+
+      const result = await sodax.moneyMarket.repay({
+        raw: false,
+        params: repayParams(ChainKeys.SONIC_MAINNET),
+        walletProvider: mockEvmProvider,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe('TX_VERIFICATION_FAILED');
+      expect(result.error.cause).toBe(verifyError);
+      expect(result.error.context?.action).toBe('repay');
+      expect(mocks.relayTxAndWaitPacket).not.toHaveBeenCalled();
     });
 
     it('wraps RELAY_TIMEOUT as MM_RELAY_TIMEOUT with action="repay"', async () => {

@@ -1,3 +1,4 @@
+import { bytesToHex, hexToBytes, sha256 } from 'viem';
 import { XService } from '@/core/XService.js';
 import type { XToken } from '@sodax/types';
 
@@ -6,15 +7,32 @@ import { TRON_DEFAULT_RPC_URL } from '@/constants.js';
 /** Zero-address sentinel the token lists use for native TRX. */
 const TRON_NATIVE_TOKEN_ADDRESS = '0x0000000000000000000000000000000000000000';
 
-/** base58check Tron address → 41-prefixed hex (drops the 4-byte checksum). */
+const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const TRON_ADDRESS_HEX = /^41[0-9a-fA-F]{40}$/;
+
+/**
+ * Tron address → 41-prefixed hex (21 bytes). Accepts valid base58check (25 bytes, `0x41` version,
+ * matching checksum) or that same 21-byte hex, with or without `0x`; anything else throws.
+ */
 function tronToHex(addr: string): string {
-  if (addr.startsWith('0x') || /^41[0-9a-fA-F]{40}$/.test(addr)) return addr.replace(/^0x/, '');
-  const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const hex = addr.startsWith('0x') ? addr.slice(2) : addr;
+  if (TRON_ADDRESS_HEX.test(hex)) return hex;
+  if (addr.startsWith('0x')) throw new Error(`invalid Tron address hex: ${addr}`);
+
   let n = 0n;
-  for (const c of addr) n = n * 58n + BigInt(B58.indexOf(c));
-  let h = n.toString(16);
-  if (h.length % 2) h = `0${h}`;
-  return h.slice(0, -8);
+  for (const c of addr) {
+    const i = B58.indexOf(c);
+    if (i < 0) throw new Error(`invalid base58 char in Tron address: ${addr}`);
+    n = n * 58n + BigInt(i);
+  }
+  const body = n === 0n ? '' : n.toString(16);
+  const leadingZeros = addr.length - addr.replace(/^1+/, '').length;
+  const bytes = hexToBytes(`0x${'00'.repeat(leadingZeros)}${body.length % 2 ? '0' : ''}${body}`);
+  if (bytes.length !== 25 || bytes[0] !== 0x41) throw new Error(`invalid Tron address: ${addr}`);
+  const payload = bytes.subarray(0, 21);
+  const checksum = sha256(sha256(payload, 'bytes'), 'bytes').subarray(0, 4);
+  if (!checksum.every((b, i) => b === bytes[21 + i])) throw new Error(`invalid Tron address checksum: ${addr}`);
+  return bytesToHex(payload).slice(2);
 }
 
 export class TronXService extends XService {
@@ -64,9 +82,16 @@ export class TronXService extends XService {
         parameter: param,
         visible: false,
       });
-      const data = (await res.json()) as { constant_result?: string[] };
-      const raw = data.constant_result?.[0];
-      return raw ? BigInt(`0x${raw}`) : 0n;
+      const data = (await res.json()) as {
+        result?: { result?: boolean; message?: string };
+        constant_result?: string[];
+      };
+      // A failed read still answers 200; parsing its word (empty, or a revert reason) shows a garbage balance.
+      const word = data.constant_result?.[0];
+      if (data.result?.result !== true || !word || !/^[0-9a-fA-F]{64}$/.test(word)) {
+        throw new Error(`balanceOf on ${xToken.address} failed: ${data.result?.message ?? 'no result'}`);
+      }
+      return BigInt(`0x${word}`);
     } catch (error) {
       console.error('Error fetching Tron balance:', error);
       return 0n;
